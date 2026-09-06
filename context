@@ -1,0 +1,444 @@
+### System Prompt: Multimodal Meme Detection Architecture
+
+**Context & Project Goal:**
+We are developing a high-utility, impressive final-year college project: an intent-driven, multimodal meme detection system designed to catch offensive and hateful memes. The core goal is to look beyond literal translations of text and images to capture the *holistic intent* of the meme. The system is built using the **PyTorch** deep learning framework, relies heavily on **pre-trained Hugging Face transformers**, and is optimized to run efficiently within a budget-friendly cloud environment (**Google Colab with a single T4 GPU**). 
+
+**The Core Gaps We Are Fixing (Where Other Repositories Fail):** 
+
+1. **Late Fusion Disconnection:** Most open-source projects rely on late-fusion vector concatenation (torch.cat), treating text and images in silos and failing to detect sarcasm/irony. We are building a mid-fusion cross-attention mechanism.
+2. **Loss of Spatial/Layout Context:** Standard projects extract raw OCR text strings but strip away structural context. We are mapping bounding box spatial coordinates directly into the text embedding space.
+3. **Lack of Cultural Subtext:** Standard models interpret images literally. We use a frozen, local Visual Language Model (VLM) to pre-extract template subtext and cultural meaning without relying on expensive external APIs.
+
+### Project System Architecture Flow (Mermaid Sequence)
+
+mermaid
+
+graph TD
+    %% Input Layer
+    A[Raw Meme Image Input] --> B1[EasyOCR Engine]
+    A --> B2[Frozen BLIP-2 VLM]
+    A --> B3[Image Preprocessor]
+
+    %% Feature Extraction / Preprocessing
+    B1 -->|Extracts Raw Text & Bounding Boxes| C1[Spatial Mapping Layer\nLinear Layer mapping xy-coordinates]
+    B2 -->|Generates Context Description\neg, Distracted Boyfriend template context| C2[Context String Appender\nMerges text + cultural context]
+    B3 -->|Resizes & Normalizes Patches| C3[Hugging Face CLIPVisionModel\nFrozen Weights]
+
+    %% Encoding Layer
+    C1 --> D1[Hugging Face CLIPTextModel\nFrozen Base Weights]
+    C2 --> D1
+    
+    %% Output of Encoders
+    D1 -->|Spatial-Aware Text Tokens| E1[Text Feature Embeddings]
+    C3 -->|Visual Patch Vectors| E2[Image Feature Embeddings]
+
+    %% Core Neural Network Fusion Block (Trainable)
+    E1 --> F[Custom PyTorch Multi-Head Cross-Attention Layer]
+    E2 --> F
+    
+    %% Classification Layer
+    F --> G[Multi-Layer Perceptron MLP Classification Head\nFully Connected Layers + Dropout]
+    G --> H{Final Output\nOffensive vs Safe Probability}
+    
+    %% Styling
+    style A fill:#f9f,stroke:#333,stroke-width:2px
+    style F fill:#bbf,stroke:#333,stroke-width:2px
+    style H fill:#bfb,stroke:#333,stroke-width:2px
+
+Use code with caution.
+
+### Detailed Technical Component Stack
+
+1. **Preprocessing & Feature Augmentation Layer:** 
+
+  * **EasyOCR Engine:** Extracts text tokens alongside 4D spatial coordinate matrices (xmin, ymin, xmax, ymax). These coordinates pass through a trainable nn.Linear mapping layer to match the hidden dimensions of the text tokens, allowing layout-aware injection.
+  * **Frozen VLM (Salesforce/blip2-opt-2.7b):** Runs local, fast zero-shot inference on the T4 GPU via Hugging Face. It answers the prompt: *"What is the emotional context or template meaning of this meme?"*. The output text string is appended to the OCR text to enrich it with explicit cultural context before tokenization.
+2. **Dual-Encoder Foundation Layer:** 
+
+  * **Text Encoder:** Pre-trained Hugging Face CLIPTextModel. Base weights remain frozen to maximize T4 memory efficiency. It ingests the combined OCR text, VLM context text, and spatial layout embeddings.
+  * **Vision Encoder:** Pre-trained Hugging Face CLIPVisionModel. Base weights remain frozen. It extracts granular visual patch embeddings from the meme image.
+3. **Trainable Fusion & Head Layer (Our Core Code Contribution):** 
+
+  * **Cross-Attention Multi-Head Layer:** A custom-written PyTorch block where text embeddings act as Queries (Q) interacting with visual Keys (K) and Values (V), and vice-versa. This dynamically calculates cross-modal interaction matrices.
+  * **MLP Classification Head:** A small, fully connected classification network stacked with Dropout layers to prevent overfitting. This layer outputs the final classification mapping for offensive meme categorization.
+
+**Target Benchmarks & Datasets:**
+The pipeline will be trained and evaluated using benchmark datasets specifically rich in multi-modal intent, starting with the **Facebook Hateful Memes Dataset (Phase 2)** and **MAMI (Multimedia Automatic Misogyny Identification)**. 
+
+### Current Directive for the AI:
+
+Based on this architectural blueprint, act as an expert machine learning engineer. Help me construct this project step-by-step. 
+
+To start, generate the **complete, robust PyTorch Dataset class (MemeDataset)** utilizing the transformers and easyocr libraries. The dataset loader must handle the raw image, execute the EasyOCR engine to capture bounding boxes, handle text tokenization for CLIPTextModel, and bundle the spatial coordinate tensors appropriately so they are ready to be passed into a training batch loop. Keep the design clean, modular, and well-commented.
+
+*Multimodal Harmful Meme Detection for Indian Multilingual Contexts*
+
+I would like to work on a research-oriented multimodal AI project focused on harmful meme detection.
+
+The core idea is not simply to build another meme classifier, but to investigate how well existing state-of-the-art vision-language models generalize to Indian multilingual memes and whether they can be improved through domain adaptation.
+
+*Objectives*
+
+* Collect and curate a new dataset of Indian harmful and non-harmful memes (English, Hindi, Hinglish, and possibly one regional language).
+* Develop clear annotation guidelines and label the dataset into meaningful categories such as religious hate, political hate, gender-based hate, cyberbullying, offensive content, and non-harmful memes.
+* Benchmark several existing multimodal models on this dataset without modification to evaluate their generalization capability.
+* Perform detailed error analysis to identify where current models fail (e.g., cultural references, multilingual text, sarcasm, OCR limitations, or contextual understanding).
+* Fine-tune or adapt the best-performing model on the collected dataset and compare its performance against the baseline.
+* Analyze whether domain adaptation significantly improves harmful meme detection in the Indian context.
+
+*Expected Contributions*
+
+* A novel Indian multilingual harmful meme dataset.
+* A comprehensive benchmark of modern multimodal models on this dataset.
+* An analysis of the limitations of current models in culturally diverse settings.
+* A domain-adapted multimodal model with improved performance.
+* An industry-grade implementation (training pipeline and inference system) along with a research paper suitable for submission to a Scopus-indexed journal.
+
+The project combines computer vision, natural language processing, multimodal learning, data engineering, explainable AI, and experimental research methodology, making it suitable as both a strong portfolio project and a potential research publication.
+
+
+Software Requirements Specification (SRS)
+
+Project Title
+
+Multimodal Intelligence System for Harmful Meme Detection
+
+⸻
+
+1. Introduction
+
+1.1 Purpose
+
+The purpose of this project is to design and develop an intelligent multimodal AI system capable of detecting potentially harmful memes by jointly analyzing textual and visual information. The system aims to assist content moderation by identifying harmful memes while minimizing false positives through confidence-based decision making.
+
+Rather than replacing human moderators, the system will function as an AI-assisted moderation tool capable of automatically handling high-confidence cases and escalating uncertain cases for human review.
+
+⸻
+
+1.2 Problem Statement
+
+The rapid growth of social media has led to an increase in harmful memes that spread hate speech, harassment, misinformation, and abusive content.
+
+Traditional text-only or image-only moderation systems often fail because the harmful intent usually emerges only from the combination of image and text.
+
+Additionally, cultural references, sarcasm, dark humor, and multilingual content make automated moderation significantly more challenging.
+
+⸻
+
+1.3 Objectives
+
+* Develop an intelligent multimodal meme classification system.
+* Build a custom dataset containing Indian multilingual memes.
+* Detect harmful content using both image and textual information.
+* Reduce false positives through confidence-based moderation.
+* Provide explainable predictions for moderators.
+* Create a deployable web application demonstrating the system.
+
+⸻
+
+2. Scope
+
+The project focuses on:
+
+* Harmful meme detection
+* Image understanding
+* OCR-based text extraction
+* Multimodal deep learning
+* Confidence estimation
+* Human-in-the-loop moderation
+* Explainability
+
+The system is not intended to permanently replace human moderators.
+
+⸻
+
+3. Functional Requirements
+
+FR1 Dataset Collection
+
+The system shall support a manually curated dataset consisting of:
+
+* Harmful memes
+* Non-harmful memes
+* English memes
+* Hindi memes
+* Hinglish memes
+* (Optional) Regional language memes
+
+⸻
+
+FR2 Image Processing
+
+The system shall
+
+* Read meme images
+* Preprocess images
+* Resize images
+* Normalize images
+
+⸻
+
+FR3 Text Extraction
+
+The system shall
+
+* Detect embedded text using OCR
+* Clean extracted text
+* Handle multilingual text
+
+⸻
+
+FR4 Multimodal Understanding
+
+The system shall jointly process
+
+* Image features
+* OCR extracted text
+* Caption (if available)
+
+to produce a unified representation.
+
+⸻
+
+FR5 Harmful Meme Detection
+
+The system shall classify memes into
+
+* Harmful
+* Non-Harmful
+
+along with prediction confidence.
+
+⸻
+
+FR6 Confidence-Based Moderation
+
+Instead of blindly classifying every meme, the system shall make moderation decisions based on confidence.
+
+High Confidence Harmful
+
+Example:
+Confidence > 90%
+
+Action:
+
+* Automatically Flag
+
+⸻
+
+High Confidence Safe
+
+Example:
+
+Confidence < 10%
+
+Action:
+
+* Automatically Approve
+
+⸻
+
+Medium Confidence
+
+Example:
+
+10–90%
+
+Action:
+
+* Forward to Human Moderator
+
+This reduces the risk of censoring satire, dark humor, and context-dependent memes.
+
+⸻
+
+FR7 Explainability
+
+The system shall provide
+
+* Confidence score
+* Predicted class
+* Heatmap or visual explanation (optional)
+* Important textual cues (optional)
+
+⸻
+
+FR8 Dashboard
+
+The application shall provide
+
+* Upload meme
+* Prediction
+* Confidence
+* Moderation decision
+* Explanation
+
+⸻
+
+4. Non-Functional Requirements
+
+Performance
+
+Prediction time
+
+< 2 seconds
+
+⸻
+
+Scalability
+
+System shall support future deployment on cloud infrastructure.
+
+⸻
+
+Reliability
+
+System should maintain stable prediction performance on unseen memes.
+
+⸻
+
+Usability
+
+Simple web interface suitable for demonstration.
+
+⸻
+
+Maintainability
+
+Model should allow future retraining using newly collected datasets.
+
+⸻
+
+Security
+
+Uploaded images shall not be permanently stored without authorization.
+
+⸻
+
+5. System Architecture
+
+              User
+                │
+          Upload Meme
+                │
+      ┌─────────┴─────────┐
+      │                   │
+  Image Encoder      OCR Engine
+      │                   │
+      └─────────┬─────────┘
+                │
+      Multimodal Model
+                │
+        Harmfulness Score
+                │
+     ┌──────────┼──────────┐
+     │          │          │
+ High Safe  Uncertain  High Harmful
+     │          │          │
+ Approve   Human Review   Flag
+
+⸻
+
+6. Technology Stack
+
+Programming Language
+
+* Python
+
+Deep Learning
+
+* PyTorch
+
+Vision-Language Models
+
+* CLIP / BLIP / SigLIP (to be finalized after literature review)
+
+OCR
+
+* EasyOCR or PaddleOCR
+
+Backend
+
+* FastAPI
+
+Frontend
+
+* Streamlit or React
+
+Database
+
+* PostgreSQL / SQLite
+
+Deployment
+
+* Docker
+
+Version Control
+
+* Git & GitHub
+
+⸻
+
+7. Dataset
+
+Expected Size
+
+3,000–5,000 memes
+
+Languages
+
+* English
+* Hindi
+* Hinglish
+* (Optional) Marathi or another regional language
+
+Categories
+
+* Harmful
+* Non-Harmful
+
+The harmful class may include examples related to religious hate, political abuse, gender-based hate, cyberbullying, and other abusive content. The system’s primary prediction remains binary (harmful vs. non-harmful), while ambiguous cases are handled through confidence-based escalation.
+
+⸻
+
+8. Expected Outputs
+
+The system will provide
+
+* Harmfulness prediction
+* Confidence score
+* Moderation recommendation
+* Explainability visualization (optional)
+
+Example:
+
+Prediction:
+Harmful
+Confidence:
+96.4%
+Decision:
+Automatically Flag
+
+⸻
+
+9. Future Enhancements
+
+* Support additional Indian languages
+* Real-time social media moderation
+* Explainable AI visualizations
+* Active learning using moderator feedback
+* Continuous model updates with new memes
+* Integration with enterprise content moderation systems
+
+⸻
+
+10. Expected Deliverables
+
+* Curated multilingual meme dataset
+* Trained multimodal deep learning model
+* FastAPI inference service
+* Interactive web application
+* Research paper (optional)
+* Complete GitHub repository with documentation
+
+

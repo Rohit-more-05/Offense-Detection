@@ -26,12 +26,40 @@ from fastapi.staticfiles import StaticFiles
 
 from app.config import get_settings
 from app.database import init_db, verify_connection, verify_predictions_table
-from app.logger import get_logger
 from app.routers import predict as predict_router
 from app.routers import review as review_router
 
-logger = get_logger(__name__)
+import logging
+import sys
+
 settings = get_settings()
+
+# ── Dual-Stream Telemetry Logging Configuration ────────────────────────────────
+class TelemetryFormatter(logging.Formatter):
+    def format(self, record):
+        # Format: [TIMESTAMP] [LOG_LEVEL] [MODULE/ENDPOINT] -> Detailed structural status message
+        timestamp = self.formatTime(record, self.datefmt)
+        return f"[{timestamp}] [{record.levelname}] [{record.name}] -> {record.getMessage()}"
+
+logger = logging.getLogger("app")
+logger.setLevel(logging.DEBUG)
+
+# Ensure handlers are cleared to prevent duplicates
+if logger.hasHandlers():
+    logger.handlers.clear()
+
+# StreamHandler to sys.stdout
+stream_handler = logging.StreamHandler(sys.stdout)
+stream_handler.setFormatter(TelemetryFormatter(datefmt="%Y-%m-%d %H:%M:%S"))
+logger.addHandler(stream_handler)
+
+# FileHandler to deploy.log
+# Placing deploy.log in the parent directory so it aligns with the orchestrator script
+file_handler = logging.FileHandler("../deploy.log", mode="a")
+file_handler.setFormatter(TelemetryFormatter(datefmt="%Y-%m-%d %H:%M:%S"))
+logger.addHandler(file_handler)
+
+logger.info("Initializing application telemetry engine...")
 
 
 # ── Lifespan ───────────────────────────────────────────────────────────────────
@@ -87,34 +115,19 @@ app.add_middleware(
 async def log_requests(request: Request, call_next):
     """Log every incoming request and outgoing response with latency."""
     client_ip = request.client.host if request.client else "unknown"
-    logger.info(
-        "[HTTP] ▶  %s %s | client=%s",
-        request.method,
-        request.url.path,
-        client_ip,
-    )
+    logger.info(f"[HTTP Request] -> Incoming {request.method} {request.url.path} from client IP {client_ip}")
+    
     t_start = time.monotonic()
     try:
+        logger.debug(f"[HTTP Middleware] -> Invoking next handler for {request.url.path}")
         response = await call_next(request)
         latency_ms = int((time.monotonic() - t_start) * 1000)
-        logger.info(
-            "[HTTP] ◀  %s %s | status=%d | latency=%dms",
-            request.method,
-            request.url.path,
-            response.status_code,
-            latency_ms,
-        )
+        
+        logger.info(f"[HTTP Response] -> Resolved {request.method} {request.url.path} with status {response.status_code} in {latency_ms}ms")
         return response
     except Exception as exc:
         latency_ms = int((time.monotonic() - t_start) * 1000)
-        logger.error(
-            "[HTTP] ✗  %s %s | UNHANDLED EXCEPTION after %dms — %s",
-            request.method,
-            request.url.path,
-            latency_ms,
-            str(exc),
-            exc_info=True,
-        )
+        logger.critical(f"[HTTP Middleware] -> Unhandled exception on {request.method} {request.url.path} after {latency_ms}ms: {exc}")
         raise
 
 
@@ -167,5 +180,35 @@ app.include_router(review_router.router, prefix="/api/v1")
 )
 def health_check():
     """Smoke-test endpoint — returns OK if the server is reachable."""
-    logger.debug("[health_check] ping")
+    logger.debug("Processing /health ping...")
+    logger.info("Health check verified, returning HTTP 200 OK.")
     return {"status": "ok", "environment": settings.environment}
+
+# ── Dummy Login Endpoint (Telemetry Injection Check) ───────────────────────────
+from pydantic import BaseModel
+
+class LoginRequest(BaseModel):
+    alive: bool = None
+
+@app.post("/api/v1/users/login", tags=["Users"])
+def dummy_login(payload: dict):
+    """Evaluates user state and conditionally logs telemetry as per orchestrator requirements."""
+    logger.info("Triggered /api/v1/users/login endpoint logic.")
+    
+    # Track the exact state evaluation of the user's alive status
+    if "alive" not in payload:
+        logger.warning("User 'alive' status key is MISSING from the payload.")
+        return JSONResponse(status_code=400, content={"error": "Missing alive key"})
+    
+    is_alive = payload.get("alive")
+    
+    if is_alive is False:
+        logger.error("User 'alive' status evaluated to FALSE. Login rejected.")
+        return JSONResponse(status_code=403, content={"error": "User is not alive"})
+        
+    if is_alive is True:
+        logger.info("User 'alive' status successfully verified as TRUE. Proceeding with authentication.")
+        return {"status": "success", "message": "User authenticated"}
+        
+    logger.error(f"User 'alive' status provided an invalid state: {is_alive}")
+    return JSONResponse(status_code=400, content={"error": "Invalid alive state"})
