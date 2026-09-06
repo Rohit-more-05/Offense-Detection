@@ -37,29 +37,21 @@ settings = get_settings()
 # ── Dual-Stream Telemetry Logging Configuration ────────────────────────────────
 class TelemetryFormatter(logging.Formatter):
     def format(self, record):
-        # Format: [TIMESTAMP] [LOG_LEVEL] [MODULE/ENDPOINT] -> Detailed structural status message
         timestamp = self.formatTime(record, self.datefmt)
         return f"[{timestamp}] [{record.levelname}] [{record.name}] -> {record.getMessage()}"
 
 logger = logging.getLogger("app")
 logger.setLevel(logging.DEBUG)
 
-# Ensure handlers are cleared to prevent duplicates
 if logger.hasHandlers():
     logger.handlers.clear()
 
-# StreamHandler to sys.stdout
+# stdout only — FileHandler deliberately removed (path is not portable on Render)
 stream_handler = logging.StreamHandler(sys.stdout)
 stream_handler.setFormatter(TelemetryFormatter(datefmt="%Y-%m-%d %H:%M:%S"))
 logger.addHandler(stream_handler)
 
-# FileHandler to deploy.log
-# Placing deploy.log in the parent directory so it aligns with the orchestrator script
-file_handler = logging.FileHandler("../deploy.log", mode="a")
-file_handler.setFormatter(TelemetryFormatter(datefmt="%Y-%m-%d %H:%M:%S"))
-logger.addHandler(file_handler)
-
-logger.info("Initializing application telemetry engine...")
+logger.info("[main] Telemetry engine initialised — stdout stream only (Render-compatible)")
 
 
 # ── Lifespan ───────────────────────────────────────────────────────────────────
@@ -179,10 +171,19 @@ app.include_router(review_router.router, prefix="/api/v1")
     responses={200: {"description": "API is running"}},
 )
 def health_check():
-    """Smoke-test endpoint — returns OK if the server is reachable."""
-    logger.debug("Processing /health ping...")
-    logger.info("Health check verified, returning HTTP 200 OK.")
-    return {"status": "ok", "environment": settings.environment}
+    """Smoke-test endpoint — returns OK immediately (model loads lazily on first /predict)."""
+    from app.services import text_inference as _ti
+    model_status = "loaded" if _ti._model_loaded else ("failed" if _ti._load_failed else "pending")
+    logger.info(
+        "[health_check] status=ok | environment=%s | model_status=%s",
+        settings.environment, model_status
+    )
+    return {
+        "status": "ok",
+        "environment": settings.environment,
+        "model_status": model_status,
+        "note": "Model loads lazily on first /predict request" if model_status == "pending" else None,
+    }
 
 # ── Dummy Login Endpoint (Telemetry Injection Check) ───────────────────────────
 from pydantic import BaseModel

@@ -35,7 +35,12 @@ pytest-asyncio==0.24.0
 # Model: am4nsolanki/autonlp-text-hateful-memes-36789092
 # BERT-based binary classifier trained on Facebook Hateful Memes dataset.
 # Weights are downloaded and cached once in ~/.cache/huggingface — zero cost/API after that.
-transformers>=4.44.2
-# torch: CPU-only build keeps the install lean (~200 MB vs 2+ GB for CUDA).
-# For GPU inference, replace with: pip install torch --index-url https://download.pytorch.org/whl/cu121
-torch>=2.4.1
+#
+# LAZY LOAD: Model is loaded on FIRST /predict call, NOT at server startup.
+# This prevents OOM and port-binding timeout on Render's 512MB free tier.
+#
+# CPU-ONLY torch: prevents pip from pulling 40MB+ NVIDIA CUDA packages (nvjitlink, cublas etc.)
+# which inflate memory usage and are useless without a GPU.
+--extra-index-url https://download.pytorch.org/whl/cpu
+torch==2.4.1+cpu
+transformers>=4.44.2,<5.0.0
