@@ -30,6 +30,11 @@ import time
 from pathlib import Path
 from typing import Optional, Tuple
 
+# CRITICAL: Suppress HF warnings and telemetry BEFORE importing transformers
+os.environ["HF_HUB_DISABLE_TELEMETRY"] = "1"
+os.environ["HF_HUB_DISABLE_SYMLINKS_WARNING"] = "1"
+os.environ["TRANSFORMERS_NO_ADVISORY_WARNINGS"] = "1"
+
 import torch
 torch.set_num_threads(1)  # CRITICAL: Minimise memory overhead — single thread for CPU inference
 

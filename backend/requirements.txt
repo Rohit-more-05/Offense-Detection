@@ -42,5 +42,5 @@ pytest-asyncio==0.24.0
 # CPU-ONLY torch: prevents pip from pulling 40MB+ NVIDIA CUDA packages (nvjitlink, cublas etc.)
 # which inflate memory usage and are useless without a GPU.
 --extra-index-url https://download.pytorch.org/whl/cpu
-torch==2.4.1+cpu
+torch==2.6.0+cpu
 transformers>=4.44.2,<5.0.0
