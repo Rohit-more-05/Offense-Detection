@@ -1,0 +1,50 @@
+# ─── Python ────────────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg
+*.egg-info/
+dist/
+build/
+.eggs/
+pip-wheel-metadata/
+
+# Virtual environments
+.venv/
+venv/
+ENV/
+env/
+
+# ─── Environment / Secrets ─────────────────────────────────────────────────────
+.env
+# NEVER commit .env — it contains live database credentials.
+# Use .env.example as the safe template.
+
+# ─── Backend ───────────────────────────────────────────────────────────────────
+backend/logs/
+backend/app/storage/uploads/*
+backend/app/storage/heatmaps/*
+!backend/app/storage/uploads/.gitkeep
+!backend/app/storage/heatmaps/.gitkeep
+# Legacy SQLite (not used — Supabase is the DB)
+backend/*.db
+
+# ─── Frontend ──────────────────────────────────────────────────────────────────
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+
+# ─── IDE ───────────────────────────────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# ─── Testing ───────────────────────────────────────────────────────────────────
+.pytest_cache/
+.coverage
+htmlcov/

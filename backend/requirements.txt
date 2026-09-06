@@ -1,0 +1,32 @@
+# ──────────────────────────────────────────────────────────────────────────────
+#  Meme Detection Backend — Python Dependencies
+#  Pin exact versions for reproducible installs: pip install -r requirements.txt
+# ──────────────────────────────────────────────────────────────────────────────
+
+# ── Web framework ──────────────────────────────────────────────────────────────
+fastapi==0.115.0
+uvicorn[standard]==0.30.6
+
+# ── Pydantic (v2) ─────────────────────────────────────────────────────────────
+pydantic>=2.9.0,<3.0.0
+pydantic-settings==2.5.2
+
+# ── Database — SQLAlchemy 2.0 + PostgreSQL driver ─────────────────────────────
+sqlalchemy>=2.0.35,<3.0.0
+# psycopg3 (psycopg[binary]) — use instead of psycopg2 for Python 3.12+ / 3.14 support.
+# Ships pre-built wheels for modern Python; psycopg2-binary requires source build on 3.14.
+psycopg[binary]==3.2.10
+
+# ── Alembic migrations ────────────────────────────────────────────────────────
+alembic==1.13.2
+
+# ── File uploads (multipart/form-data) ───────────────────────────────────────
+python-multipart==0.0.9
+
+# ── Environment variable loading ──────────────────────────────────────────────
+python-dotenv==1.0.1
+
+# ── Testing ───────────────────────────────────────────────────────────────────
+pytest==8.3.2
+httpx==0.27.2
+pytest-asyncio==0.24.0

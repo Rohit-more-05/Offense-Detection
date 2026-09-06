@@ -1,0 +1,171 @@
+"""
+routers/predict.py
+==================
+POST /api/v1/predict
+  - Accepts multipart/form-data with `file` (UploadFile) and optional
+    `manual_text_override` (str form field).
+  - Saves file → calls mock_inference → routes decision → persists to DB.
+  - Returns PredictResponse.
+"""
+
+from __future__ import annotations
+
+import time
+import uuid
+from pathlib import Path
+from typing import Optional
+
+from fastapi import APIRouter, Depends, Form, HTTPException, UploadFile
+from fastapi.responses import JSONResponse
+from sqlalchemy.orm import Session
+
+from app.config import get_settings
+from app.database import get_db
+from app.logger import get_logger
+from app.models.prediction import Prediction
+from app.schemas.predict import PredictResponse
+from app.services import decision_router, mock_inference
+
+logger = get_logger(__name__)
+router = APIRouter(prefix="/predict", tags=["Prediction"])
+
+ALLOWED_CONTENT_TYPES = {"image/jpeg", "image/png", "image/webp"}
+HEATMAP_STUB_URL = "/static/heatmaps/placeholder.png"
+
+
+@router.post(
+    "",
+    response_model=PredictResponse,
+    summary="Submit a meme image for harm classification",
+    responses={
+        400: {"description": "Invalid file type"},
+        500: {"description": "Internal server error during inference or DB write"},
+    },
+)
+async def predict(
+    file: UploadFile,
+    manual_text_override: Optional[str] = Form(None),
+    db: Session = Depends(get_db),
+) -> PredictResponse:
+    """
+    Upload a meme image and receive a harm classification with a moderation decision.
+
+    - **file**: `.jpg`, `.png`, or `.webp` image
+    - **manual_text_override**: optional OCR text to pass to the inference engine (Phase 2)
+    """
+    logger.info(
+        "[predict] START — filename=%r | content_type=%r | text_override=%r",
+        file.filename,
+        file.content_type,
+        manual_text_override,
+    )
+
+    # ── Validate content type ──────────────────────────────────────────────────
+    if file.content_type not in ALLOWED_CONTENT_TYPES:
+        logger.error(
+            "[predict] FAILED — unsupported content type: %r", file.content_type
+        )
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unsupported file type '{file.content_type}'. Allowed: jpg, png, webp.",
+        )
+
+    settings = get_settings()
+    t_start = time.monotonic()
+
+    try:
+        # ── Step 1: Save uploaded file ─────────────────────────────────────────
+        upload_dir = Path(settings.upload_dir)
+        upload_dir.mkdir(parents=True, exist_ok=True)
+
+        file_ext = Path(file.filename or "upload.jpg").suffix
+        unique_filename = f"{uuid.uuid4()}{file_ext}"
+        save_path = upload_dir / unique_filename
+
+        logger.info("[predict] Saving file → %s", save_path)
+        try:
+            contents = await file.read()
+            save_path.write_bytes(contents)
+            logger.info("[predict] File saved — size=%d bytes", len(contents))
+        except OSError as exc:
+            logger.error("[predict] File save FAILED — reason: %s", str(exc), exc_info=True)
+            raise HTTPException(status_code=500, detail=f"Could not save uploaded file: {exc}")
+
+        image_path_str = str(save_path)
+
+        # ── Step 2: Mock inference ─────────────────────────────────────────────
+        logger.info("[predict] Calling mock_inference.run()")
+        try:
+            label, confidence = mock_inference.run(image_path_str, manual_text_override)
+        except RuntimeError as exc:
+            logger.error("[predict] Inference FAILED — reason: %s", str(exc), exc_info=True)
+            raise HTTPException(status_code=500, detail=f"Inference failed: {exc}")
+
+        # ── Step 3: Route decision ─────────────────────────────────────────────
+        logger.info("[predict] Calling decision_router.route(confidence=%s)", confidence)
+        try:
+            moderation_decision = decision_router.route(confidence)
+        except ValueError as exc:
+            logger.error("[predict] Decision routing FAILED — reason: %s", str(exc), exc_info=True)
+            raise HTTPException(status_code=500, detail=f"Decision routing failed: {exc}")
+
+        # ── Step 4: Compute execution time ────────────────────────────────────
+        execution_time_ms = int((time.monotonic() - t_start) * 1000)
+
+        # ── Step 5: Persist to database ───────────────────────────────────────
+        prediction_id = str(uuid.uuid4())
+        # Auto decisions are considered "reviewed" immediately (audit only)
+        is_reviewed = moderation_decision != "HUMAN_REVIEW"
+
+        db_row = Prediction(
+            id=prediction_id,
+            filename=file.filename or unique_filename,
+            image_path=image_path_str,
+            label=label,
+            confidence=confidence,
+            moderation_decision=moderation_decision,
+            heatmap_path=None,
+            execution_time_ms=execution_time_ms,
+            reviewed=is_reviewed,
+        )
+
+        logger.info("[predict] Writing prediction to DB — id=%s", prediction_id)
+        try:
+            db.add(db_row)
+            db.commit()
+            db.refresh(db_row)
+            logger.info("[predict] DB write confirmed — id=%s", prediction_id)
+        except Exception as exc:
+            db.rollback()
+            logger.error(
+                "[predict] DB write FAILED — rolling back — reason: %s", str(exc), exc_info=True
+            )
+            raise HTTPException(status_code=500, detail=f"Database write failed: {exc}")
+
+        # ── Step 6: Build response ─────────────────────────────────────────────
+        response = PredictResponse(
+            prediction_id=prediction_id,
+            label=label,
+            confidence=confidence,
+            moderation_decision=moderation_decision,
+            execution_time_ms=execution_time_ms,
+            heatmap_url=HEATMAP_STUB_URL,
+        )
+
+        logger.info(
+            "[predict] SUCCESS — id=%s | label=%r | confidence=%s | decision=%r | time=%dms",
+            prediction_id,
+            label,
+            confidence,
+            moderation_decision,
+            execution_time_ms,
+        )
+        return response
+
+    except HTTPException:
+        raise  # Already handled above
+    except Exception as exc:
+        logger.error(
+            "[predict] Unexpected FAILED — reason: %s", str(exc), exc_info=True
+        )
+        raise HTTPException(status_code=500, detail=f"Unexpected error: {exc}")
