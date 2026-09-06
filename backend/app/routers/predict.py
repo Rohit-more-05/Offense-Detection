@@ -4,8 +4,13 @@ routers/predict.py
 POST /api/v1/predict
   - Accepts multipart/form-data with `file` (UploadFile) and optional
     `manual_text_override` (str form field).
-  - Saves file → calls mock_inference → routes decision → persists to DB.
+  - Saves file → extracts text (manual_text_override for Phase 1, OCR in Phase 2)
+    → calls text_inference (real BERT model) → routes decision → persists to DB.
   - Returns PredictResponse.
+
+Phase 1 note: Image pixels are NOT analysed yet. Only text is classified.
+  Priority: manual_text_override > filename stub.
+  Phase 2 will wire EasyOCR here to extract text from image pixels.
 """
 
 from __future__ import annotations
@@ -24,7 +29,7 @@ from app.database import get_db
 from app.logger import get_logger
 from app.models.prediction import Prediction
 from app.schemas.predict import PredictResponse
-from app.services import decision_router, mock_inference
+from app.services import decision_router, text_inference
 
 logger = get_logger(__name__)
 router = APIRouter(prefix="/predict", tags=["Prediction"])
@@ -93,15 +98,34 @@ async def predict(
 
         image_path_str = str(save_path)
 
-        # ── Step 2: Mock inference ─────────────────────────────────────────────
-        logger.info("[predict] Calling mock_inference.run()")
+        # ── Step 2: Resolve input text for the classifier ─────────────────────
+        # Phase 1: No OCR yet. Use manual_text_override when provided.
+        # Phase 2: Replace this block with EasyOCR extraction from image_path_str.
+        if manual_text_override and manual_text_override.strip():
+            input_text = manual_text_override.strip()
+            logger.info(
+                "[predict] Text source=manual_text_override | length=%d", len(input_text)
+            )
+        else:
+            # Fallback: use the filename as a minimal text stub so inference always
+            # runs. Log a prominent warning — this is a Phase 1 limitation.
+            input_text = Path(file.filename or "unknown").stem.replace("_", " ")
+            logger.warning(
+                "[predict] No OCR yet — no manual_text_override provided. "
+                "Falling back to filename stub=%r. "
+                "Results will be low-quality until Phase 2 OCR is wired in.",
+                input_text,
+            )
+
+        # ── Step 3: Real text inference (BERT hate-speech classifier) ──────────
+        logger.info("[predict] Calling text_inference.run() | input_chars=%d", len(input_text))
         try:
-            label, confidence = mock_inference.run(image_path_str, manual_text_override)
+            label, confidence = text_inference.run(input_text)
         except RuntimeError as exc:
             logger.error("[predict] Inference FAILED — reason: %s", str(exc), exc_info=True)
             raise HTTPException(status_code=500, detail=f"Inference failed: {exc}")
 
-        # ── Step 3: Route decision ─────────────────────────────────────────────
+        # ── Step 4: Route decision ─────────────────────────────────────────────
         logger.info("[predict] Calling decision_router.route(confidence=%s)", confidence)
         try:
             moderation_decision = decision_router.route(confidence)
@@ -109,10 +133,10 @@ async def predict(
             logger.error("[predict] Decision routing FAILED — reason: %s", str(exc), exc_info=True)
             raise HTTPException(status_code=500, detail=f"Decision routing failed: {exc}")
 
-        # ── Step 4: Compute execution time ────────────────────────────────────
+        # ── Step 5: Compute execution time ────────────────────────────────────
         execution_time_ms = int((time.monotonic() - t_start) * 1000)
 
-        # ── Step 5: Persist to database ───────────────────────────────────────
+        # ── Step 6: Persist to database ───────────────────────────────────────
         prediction_id = str(uuid.uuid4())
         # Auto decisions are considered "reviewed" immediately (audit only)
         is_reviewed = moderation_decision != "HUMAN_REVIEW"
@@ -142,7 +166,7 @@ async def predict(
             )
             raise HTTPException(status_code=500, detail=f"Database write failed: {exc}")
 
-        # ── Step 6: Build response ─────────────────────────────────────────────
+        # ── Step 7: Build response ─────────────────────────────────────────────
         response = PredictResponse(
             prediction_id=prediction_id,
             label=label,
