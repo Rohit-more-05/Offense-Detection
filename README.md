@@ -19,7 +19,7 @@ graph TD
     User([User / Moderator])
     UI[Frontend: React + Vite + Tailwind]:::frontend
     API[Backend: FastAPI + Python]:::backend
-    ML[Mock Inference Pipeline<br/>(Phase 2: CLIP/BLIP-2)]:::backend
+    ML["Mock Inference Pipeline<br/>(Phase 2: CLIP/BLIP-2)"]:::backend
     DB[(Supabase PostgreSQL)]:::db
     Queue[Human Review Queue]:::review
 
