@@ -29,6 +29,8 @@ from pathlib import Path
 from typing import Tuple
 
 import torch
+torch.set_num_threads(1) # CRITICAL: Reduce memory overhead on CPU for 512MB environments
+
 from fastapi import HTTPException
 from transformers import AutoModelForSequenceClassification, AutoTokenizer
 
@@ -131,7 +133,7 @@ _t0 = time.monotonic()
 try:
     tokenizer: AutoTokenizer = AutoTokenizer.from_pretrained(MODEL_ID)
     model: AutoModelForSequenceClassification = (
-        AutoModelForSequenceClassification.from_pretrained(MODEL_ID)
+        AutoModelForSequenceClassification.from_pretrained(MODEL_ID, low_cpu_mem_usage=True)
     )
     # CRITICAL — disables dropout so identical input always returns identical output.
     model.eval()
