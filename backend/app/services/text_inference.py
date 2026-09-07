@@ -27,6 +27,7 @@ from __future__ import annotations
 import os
 import threading
 import time
+import gc
 from pathlib import Path
 from typing import Optional, Tuple
 
@@ -211,8 +212,27 @@ def _ensure_model_loaded() -> None:
             # CRITICAL — disables dropout for deterministic inference
             _model.eval()
 
+            # =====================================================================
+            # MEMORY LEAK & OOM FIX: Dynamic Quantization to INT8
+            # =====================================================================
+            # The Render 512MB RAM limit is being exceeded by the ~400MB float32 weights.
+            # Dynamically quantizing the Linear layers to INT8 reduces memory footprint
+            # by nearly 75% and speeds up CPU inference, patching the OOM interruption.
+            logger.info("[text_inference] [TELEMETRY:MEMORY_OPT] Starting dynamic quantization to INT8...")
+            quant_t0 = time.monotonic()
+            _model = torch.quantization.quantize_dynamic(
+                _model, {torch.nn.Linear}, dtype=torch.qint8
+            )
+            logger.info(
+                "[text_inference] [TELEMETRY:MEMORY_OPT] Dynamic quantization complete in %dms. "
+                "Memory footprint drastically reduced.", int((time.monotonic() - quant_t0) * 1000)
+            )
+
             _device = "cuda" if torch.cuda.is_available() else "cpu"
             _model.to(_device)
+            
+            # Aggressive garbage collection to clear temporary load variables
+            gc.collect()
 
             elapsed_ms = int((time.monotonic() - t0) * 1000)
             _model_loaded = True
@@ -231,7 +251,9 @@ def _ensure_model_loaded() -> None:
             elapsed_ms = int((time.monotonic() - t0) * 1000)
             logger.error(
                 "[text_inference] [TELEMETRY:LAZY_LOAD:FAILED] "
-                "status=FAILED | elapsed_ms=%d | model_id=%r | error=%r",
+                "status=FAILED | analyser=NOT_WORKING | module=text_inference | "
+                "elapsed_ms=%d | model_id=%r | error=%r | "
+                "Session interrupted during model weight loading.",
                 elapsed_ms, MODEL_ID, str(exc),
                 exc_info=True
             )
@@ -348,10 +370,13 @@ def run(text: str) -> Tuple[str, float]:
         )
 
         logger.info(
-            "[text_inference] call_id=%d | SUCCESS | label=%r | confidence=%.6f | "
+            "[text_inference] call_id=%d | SUCCESS | analyser=WORKING | label=%r | confidence=%.6f | "
             "total_ms=%d (tok=%d fwd=%d)",
             call_id, label, confidence, elapsed_ms, tok_ms, fwd_ms,
         )
+
+        # Force garbage collection to prevent memory leaks after processing
+        gc.collect()
 
         return label, confidence
 
@@ -360,8 +385,9 @@ def run(text: str) -> Tuple[str, float]:
     except Exception as exc:
         elapsed_ms = int((time.monotonic() - t_start) * 1000)
         logger.error(
-            "[text_inference] [TELEMETRY:INFERENCE] call_id=%d | FAILED | "
-            "elapsed_ms=%d | reason: %s",
+            "[text_inference] [TELEMETRY:INFERENCE] call_id=%d | FAILED | analyser=NOT_WORKING | "
+            "module=text_inference | elapsed_ms=%d | reason: %s | "
+            "Session interrupted during inference forward pass.",
             call_id, elapsed_ms, str(exc), exc_info=True,
         )
         raise HTTPException(
