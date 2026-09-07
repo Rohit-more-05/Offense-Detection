@@ -6,7 +6,12 @@
  * to satisfy the Phase 1.5 observability directive.
  */
 
-const BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000/api/v1';
+// Automatically use live Render API in production, otherwise fallback to localhost
+const DEFAULT_URL = import.meta.env.PROD 
+  ? 'https://memeguard-backend.onrender.com/api/v1' 
+  : 'http://localhost:8000/api/v1';
+
+const BASE_URL = import.meta.env.VITE_API_BASE_URL || DEFAULT_URL;
 
 // ── Generic fetch wrapper ──────────────────────────────────────────────────────
 async function apiFetch(url, options = {}) {

@@ -136,10 +136,22 @@ async def predict(
         # ── Step 5: Compute execution time ────────────────────────────────────
         execution_time_ms = int((time.monotonic() - t_start) * 1000)
 
-        # ── Step 6: Persist to database ───────────────────────────────────────
+        # ── Step 6: Persist to database & Security Criteria Tracing ────────────
         prediction_id = str(uuid.uuid4())
         # Auto decisions are considered "reviewed" immediately (audit only)
         is_reviewed = moderation_decision != "HUMAN_REVIEW"
+        is_harmful = label == "Harmful"
+
+        # Explicit Telemetry Injection for Security/Moderation criteria (DevSecOps requirement)
+        logger.debug(
+            "[predict] [TELEMETRY:SECURITY_CHECK] -> Evaluating moderation criteria for routing..."
+        )
+        logger.debug(f"[predict] [TELEMETRY:SECURITY_CHECK] -> is_harmful = {is_harmful}")
+        logger.debug(f"[predict] [TELEMETRY:SECURITY_CHECK] -> confidence_score = {confidence}")
+        logger.debug(f"[predict] [TELEMETRY:SECURITY_CHECK] -> auto_reviewed_status = {is_reviewed}")
+        
+        if not is_reviewed:
+            logger.warning("[predict] [TELEMETRY:SECURITY_CHECK] -> Profile/Meme failed auto-trust threshold. Requires human alive check.")
 
         db_row = Prediction(
             id=prediction_id,

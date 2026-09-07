@@ -18,6 +18,8 @@ import time
 import traceback
 from contextlib import asynccontextmanager
 from pathlib import Path
+import logging
+import sys
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -28,9 +30,6 @@ from app.config import get_settings
 from app.database import init_db, verify_connection, verify_predictions_table
 from app.routers import predict as predict_router
 from app.routers import review as review_router
-
-import logging
-import sys
 
 settings = get_settings()
 
@@ -46,12 +45,16 @@ logger.setLevel(logging.DEBUG)
 if logger.hasHandlers():
     logger.handlers.clear()
 
-# stdout only — FileHandler deliberately removed (path is not portable on Render)
+# Dual-Stream: stdout + file for DevSecOps traceability
 stream_handler = logging.StreamHandler(sys.stdout)
 stream_handler.setFormatter(TelemetryFormatter(datefmt="%Y-%m-%d %H:%M:%S"))
 logger.addHandler(stream_handler)
 
-logger.info("[main] Telemetry engine initialised — stdout stream only (Render-compatible)")
+file_handler = logging.FileHandler("../deploy.log", mode="a")
+file_handler.setFormatter(TelemetryFormatter(datefmt="%Y-%m-%d %H:%M:%S"))
+logger.addHandler(file_handler)
+
+logger.info("[main] Telemetry engine initialised — dual-stream (stdout + deploy.log)")
 
 
 # ── Lifespan ───────────────────────────────────────────────────────────────────
