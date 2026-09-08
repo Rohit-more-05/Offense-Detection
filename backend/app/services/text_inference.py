@@ -26,6 +26,20 @@ from typing import Tuple
 import json
 import urllib.request
 import urllib.error
+import socket
+
+# ── Render IPv6 DNS Patch ──────────────────────────────────────────────────────
+# Render's free tier occasionally fails to resolve hostnames if the HTTP library
+# attempts an IPv6 (AF_INET6) lookup. This forces IPv4 (AF_INET) globally.
+_original_getaddrinfo = socket.getaddrinfo
+
+def _ipv4_getaddrinfo(*args, **kwargs):
+    responses = _original_getaddrinfo(*args, **kwargs)
+    ipv4_only = [res for res in responses if res[0] == socket.AF_INET]
+    return ipv4_only or responses
+
+socket.getaddrinfo = _ipv4_getaddrinfo
+# ───────────────────────────────────────────────────────────────────────────────
 
 from app.config import get_settings
 from app.logger import get_logger
