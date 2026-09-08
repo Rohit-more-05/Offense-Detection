@@ -14,23 +14,24 @@ export default function Dashboard() {
     console.log('[Dashboard] mounted');
   }, []);
 
-  const [selectedFile, setSelectedFile] = useState(null);
-  const [previewUrl, setPreviewUrl] = useState(null);
-  const [result, setResult] = useState(null);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState(null);
-  const [isBackendAlive, setIsBackendAlive] = useState(true);
+  const [selectedFile, setSelectedFile]   = useState(null);
+  const [previewUrl, setPreviewUrl]       = useState(null);
+  const [result, setResult]               = useState(null);
+  const [loading, setLoading]             = useState(false);
+  // error can be: null | string | DiagnosticReport object
+  const [error, setError]                 = useState(null);
+  const [healthInfo, setHealthInfo]       = useState(null); // { alive, modelStatus, code }
 
-  // Proactive Health and Gateway Pre-Flight Check (Phase 3 Requirement)
+  // ── Proactive pre-flight health check ──────────────────────────────────────
   useEffect(() => {
     let mounted = true;
     const verifyHealth = async () => {
-      const alive = await checkHealth();
-      if (mounted) setIsBackendAlive(alive);
-      
-      // Attempt self-healing reconnection polling if dead
-      if (!alive && mounted) {
-        setTimeout(verifyHealth, 5000);
+      const info = await checkHealth();
+      if (!mounted) return;
+      setHealthInfo(info);
+      if (!info.alive) {
+        // Retry every 8 seconds if backend is down
+        setTimeout(verifyHealth, 8000);
       }
     };
     verifyHealth();
@@ -77,11 +78,144 @@ export default function Dashboard() {
       setResult(data);
     } catch (err) {
       console.error('[Dashboard] ERROR:', err);
-      setError(err.message || 'Detection failed. Is the backend running?');
+      // If the API layer produced a diagnosticReport, pass the whole object
+      if (err.diagnosticReport) {
+        setError(err.diagnosticReport);
+      } else {
+        // Fallback: plain string so nothing is ever silent
+        setError(err.message || 'Detection failed. Is the backend running?');
+      }
     } finally {
       setLoading(false);
     }
   }, [selectedFile]);
+
+  // ── Renders the rich terminal-style diagnostic panel ───────────────────────
+  const renderErrorPanel = () => {
+    if (!error) return null;
+
+    // Plain string fallback
+    if (typeof error === 'string') {
+      return (
+        <div
+          className="rounded-xl border border-red-500/30 bg-red-500/10 p-4 text-sm text-red-300"
+          id="upload-error"
+        >
+          ⚠ {error}
+        </div>
+      );
+    }
+
+    // Rich structured DiagnosticReport
+    const r = error;
+    const bp = r.backendPayload;
+
+    // Colour-code the fault layer
+    const layerColour = {
+      CLIENT_NETWORK:   'text-yellow-400',
+      RENDER_CONTAINER: 'text-red-400',
+      BACKEND_ENDPOINT: 'text-orange-400',
+    }[r.inferredFaultLayer] ?? 'text-red-400';
+
+    const pingBadge = () => {
+      if (r.healthPingStatus === 'ok')      return <span className="text-green-400">✅ ALIVE (HTTP {r.healthPingCode})</span>;
+      if (r.healthPingStatus === 'timeout') return <span className="text-amber-400">⏱ TIMEOUT (5 s)</span>;
+      if (r.healthPingStatus === 'dead')    return <span className="text-red-400">❌ DEAD</span>;
+      if (r.healthPingStatus === 'error')   return <span className="text-orange-400">⚠ HTTP {r.healthPingCode}</span>;
+      return <span className="text-slate-400">— skipped (client offline)</span>;
+    };
+
+    return (
+      <div
+        className="rounded-xl border border-red-500/30 bg-red-500/10 p-4 text-sm text-red-300"
+        id="upload-error"
+      >
+        {/* Header */}
+        <div className="font-bold border-b border-red-500/20 pb-2 mb-3 text-red-400 flex items-center gap-2">
+          <span>⚠️ CRITICAL ANALYSIS FAILURE DIAGNOSTICS</span>
+          <span className={`ml-auto text-xs font-mono px-2 py-0.5 rounded bg-red-900/40 ${layerColour}`}>
+            {r.inferredFaultLayer ?? 'UNKNOWN'}
+          </span>
+        </div>
+
+        <ul className="space-y-1.5 font-mono text-xs">
+          <li>
+            <span className="text-slate-400">[TIMESTAMP]          </span>
+            <span className="text-white">{r.timestamp}</span>
+          </li>
+          <li>
+            <span className="text-slate-400">[TARGET ROUTE]       </span>
+            <span className="text-violet-300">/api/v1{r.targetRoute}</span>
+          </li>
+          <li>
+            <span className="text-slate-400">[CLIENT ONLINE]      </span>
+            <span className={r.clientOnline ? 'text-green-400' : 'text-red-400'}>
+              {r.clientOnline ? '✅ YES' : '❌ NO — browser is offline'}
+            </span>
+          </li>
+          <li>
+            <span className="text-slate-400">[HEALTH PING]        </span>
+            {pingBadge()}
+          </li>
+          <li>
+            <span className="text-slate-400">[FAULT LAYER]        </span>
+            <span className={layerColour}>{r.inferredFaultLayer ?? '—'}</span>
+          </li>
+          <li>
+            <span className="text-slate-400">[SYSTEM FAULT]       </span>
+            <span className="text-red-300 break-all">{r.inferredFaultReason}</span>
+          </li>
+          <li>
+            <span className="text-slate-400">[DIAGNOSTIC TRACE]   </span>
+            <span className="text-amber-300 break-all">{r.detailedTrace}</span>
+          </li>
+          <li>
+            <span className="text-slate-400">[RAW ERROR]          </span>
+            <span className="text-slate-300 break-all">{r.rawError}</span>
+          </li>
+
+          {/* Backend structured payload (Phase 2/3 gateway exceptions) */}
+          {bp && bp.phase && (
+            <>
+              <li className="mt-2 pt-2 border-t border-red-500/20">
+                <span className="text-slate-400">[BACKEND PHASE]      </span>
+                <span className="text-orange-300">{bp.phase}</span>
+              </li>
+              {bp.hardware_state && (
+                <li>
+                  <span className="text-slate-400">[HARDWARE STATE]     </span>
+                  <span className="text-amber-300">
+                    CPU threads: {bp.hardware_state.cpu_threads} | Memory pressure: {bp.hardware_state.memory_pressure}
+                  </span>
+                </li>
+              )}
+              {bp.remediation && (
+                <li>
+                  <span className="text-slate-400">[REMEDIATION]        </span>
+                  <span className="text-green-300">{bp.remediation}</span>
+                </li>
+              )}
+              {bp.error_message && (
+                <li>
+                  <span className="text-slate-400">[INTERNAL MSG]       </span>
+                  <span className="text-slate-300 break-all">{bp.error_message}</span>
+                </li>
+              )}
+            </>
+          )}
+
+          <li className="pt-2 border-t border-red-500/20">
+            <span className="text-slate-400">[POSSIBLE CAUSE]     </span>
+            <span className="text-slate-300">
+              Model loading phase exceeded Render's 512 MB RAM ceiling, API session was dropped by the DB connection pool, or CORS pre-flight was blocked.
+            </span>
+          </li>
+        </ul>
+      </div>
+    );
+  };
+
+  const isBackendAlive = healthInfo ? healthInfo.alive : true; // optimistic until first check
 
   return (
     <main className="mx-auto max-w-3xl px-4 py-10 sm:px-6">
@@ -91,8 +225,21 @@ export default function Dashboard() {
           Meme Harm Detection
         </h1>
         <p className="mt-2 text-slate-400 text-sm">
-          Upload a meme to classify it with mock inference — Phase 1 demo.
+          Upload a meme to classify it with AI inference.
         </p>
+
+        {/* Inline health status badge */}
+        {healthInfo && (
+          <div className="mt-2 inline-flex items-center gap-1.5 text-xs font-mono px-2 py-1 rounded-full border border-slate-700 bg-slate-800/60">
+            <span className={`w-2 h-2 rounded-full ${healthInfo.alive ? 'bg-green-400 animate-pulse' : 'bg-red-500'}`} />
+            <span className={healthInfo.alive ? 'text-green-400' : 'text-red-400'}>
+              Backend {healthInfo.alive ? 'Online' : 'Offline'}
+            </span>
+            {healthInfo.alive && healthInfo.modelStatus !== 'unknown' && (
+              <span className="text-slate-400">— model: {healthInfo.modelStatus}</span>
+            )}
+          </div>
+        )}
       </div>
 
       {/* Upload card */}
@@ -105,19 +252,17 @@ export default function Dashboard() {
           disabled={loading}
         />
 
-        {/* Error */}
-        {error && (
-          <div className="rounded-xl border border-red-500/30 bg-red-500/10 p-4 text-sm text-red-300" id="upload-error">
-            ⚠ {error}
+        {/* System Degradation Notice */}
+        {healthInfo && !healthInfo.alive && !error && (
+          <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-4 text-sm text-amber-300 font-mono" id="health-warning">
+            <div className="font-bold text-amber-400 mb-1">⚠️ SYSTEM DEGRADATION NOTICE</div>
+            <div>Connection to Render Inference Cluster timed out (HTTP {healthInfo.code ?? 'N/A'}).</div>
+            <div className="text-xs text-amber-400/70 mt-1">Attempting automatic self-healing reconnection every 8 seconds...</div>
           </div>
         )}
 
-        {/* System Degradation Notice */}
-        {!isBackendAlive && !error && (
-          <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-4 text-sm text-amber-300" id="health-warning">
-            ⚠️ System Degradation Notice: Connection to Render Inference Cluster timed out. Attempting automatic self-healing reconnection...
-          </div>
-        )}
+        {/* Rich diagnostic error panel */}
+        {renderErrorPanel()}
 
         {/* Action buttons */}
         <div className="flex gap-3">
