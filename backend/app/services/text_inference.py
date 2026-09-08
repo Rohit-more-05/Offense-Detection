@@ -33,7 +33,9 @@ from app.logger import get_logger
 logger = get_logger(__name__)
 
 # ── Constants ──────────────────────────────────────────────────────────────────
-MODEL_ID    = "am4nsolanki/autonlp-text-hateful-memes-36789092"
+# The original model (am4nsolanki/autonlp-text-hateful-memes-36789092) was dropped 
+# by the HuggingFace Free Inference Tier. We now use an officially supported Meta model.
+MODEL_ID    = "facebook/roberta-hate-speech-dynabench-r4-target"
 
 # HuggingFace migrated inference to router.huggingface.co
 # api-inference.huggingface.co has no A records as of 2026
@@ -42,9 +44,12 @@ HF_PATH     = f"/hf-inference/models/{MODEL_ID}"
 HF_PORT     = 443
 
 LABEL_MAP   = {
-    "LABEL_0": "Safe",   "LABEL_1": "Harmful",
-    "safe":    "Safe",   "harmful": "Harmful",
-    "Safe":    "Safe",   "Harmful": "Harmful",
+    "hate":       "Harmful",
+    "nothate":    "Safe",
+    "toxic":      "Harmful",
+    "neutral":    "Safe",
+    "LABEL_0":    "Safe",     # Fallback
+    "LABEL_1":    "Harmful",  # Fallback
 }
 REQUEST_TIMEOUT = 30.0
 
@@ -267,19 +272,34 @@ def run(text: str) -> Tuple[str, float]:
             except (json.JSONDecodeError, KeyError, AttributeError):
                 pass
 
-        if status_code == 401:
+        if status_code == 400:
             raise RuntimeError(
-                "[HF_AUTH_ERROR] HuggingFace returned 401 Unauthorized. "
-                "Check HUGGINGFACE_API_KEY is correctly set in Render env vars."
+                f"[HF_MODEL_UNSUPPORTED] HuggingFace Free Tier refused the model: {response_text}. "
+                "The provider 'hf-inference' no longer supports this specific model architecture on the free tier."
+            )
+            
+        if status_code == 401 or status_code == 403:
+            raise RuntimeError(
+                f"[HF_AUTH_ERROR] HuggingFace returned {status_code} Unauthorized/Forbidden. "
+                "Check HUGGINGFACE_API_KEY is correctly set in Render env vars and has permissions."
+            )
+            
+        if status_code == 429:
+            raise RuntimeError(
+                "[HF_RATE_LIMIT] HuggingFace rate limit exceeded. You have made too many requests "
+                "on the free tier. Please wait or upgrade your Hugging Face account."
             )
 
         if status_code != 200:
             raise RuntimeError(
-                f"HuggingFace API returned HTTP {status_code}: {response_text[:300]}"
+                f"[HF_API_ERROR] HuggingFace API returned HTTP {status_code}: {response_text[:300]}"
             )
 
         # Parse response
-        result = json.loads(response_text)
+        try:
+            result = json.loads(response_text)
+        except json.JSONDecodeError as e:
+            raise RuntimeError(f"[HF_MALFORMED_RESPONSE] Could not parse JSON from HF API: {e} | Body: {response_text[:200]}")
         logger.debug("[text_inference] [TELEMETRY:API_CALL] Raw response: %r", result)
 
         if isinstance(result, list) and len(result) > 0 and isinstance(result[0], list):
