@@ -30,13 +30,12 @@ import socket
 
 # ── Render IPv6 DNS Patch ──────────────────────────────────────────────────────
 # Render's free tier occasionally fails to resolve hostnames if the HTTP library
-# attempts an IPv6 (AF_INET6) lookup. This forces IPv4 (AF_INET) globally.
+# attempts an IPv6 (AF_INET6) lookup. This forces IPv4 (AF_INET) at the query level.
 _original_getaddrinfo = socket.getaddrinfo
 
-def _ipv4_getaddrinfo(*args, **kwargs):
-    responses = _original_getaddrinfo(*args, **kwargs)
-    ipv4_only = [res for res in responses if res[0] == socket.AF_INET]
-    return ipv4_only or responses
+def _ipv4_getaddrinfo(host, port, family=0, type=0, proto=0, flags=0):
+    # Force the query to ONLY ask for IPv4, preventing the AAAA DNS drop bug on Render
+    return _original_getaddrinfo(host, port, socket.AF_INET, type, proto, flags)
 
 socket.getaddrinfo = _ipv4_getaddrinfo
 # ───────────────────────────────────────────────────────────────────────────────
