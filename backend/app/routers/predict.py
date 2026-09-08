@@ -121,29 +121,34 @@ async def predict(
         logger.info("[predict] Calling text_inference.run() | input_chars=%d", len(input_text))
         try:
             label, confidence = text_inference.run(input_text)
-        except RuntimeError as exc:
-            logger.error("[predict] Inference FAILED — reason: %s", str(exc), exc_info=True)
-            # DYNAMIC EXCEPTION MAPPING (Phase 3 Requirement)
-            # Trap OOMs, Quantization timeouts, or Thread crashes before Render drops the connection
-            return JSONResponse(
-                status_code=503,
-                content={
-                    "detail": "Analysis Engine Failure",
-                    "phase": "DYNAMIC_QUANTIZATION_TIMEOUT" if "quantize" in str(exc).lower() else "INFERENCE_EXECUTION_FAULT",
-                    "hardware_state": {"cpu_threads": 1, "memory_pressure": "HIGH"},
-                    "remediation": "Check deploy.log for [TELEMETRY:MEMORY_OPT] flags.",
-                    "error_message": str(exc)
-                }
-            )
         except Exception as exc:
-            logger.error("[predict] Unexpected Inference FAILED — reason: %s", str(exc), exc_info=True)
+            logger.error("[predict] Inference FAILED — reason: %s", str(exc), exc_info=True)
+            exc_str = str(exc).lower()
+            
+            # DYNAMIC EXCEPTION MAPPING (Phase 3 Requirement)
+            if "hf_token" in exc_str or "401 client error" in exc_str or "gated repo" in exc_str:
+                phase = "HF_AUTH_ERROR"
+                remediation = "Set HF_TOKEN in Render environment variables."
+            elif "accelerate" in exc_str or "import" in exc_str:
+                phase = "MISSING_ACCELERATE_PKG"
+                remediation = "Ensure 'accelerate' is installed. deploy.sh should self-heal this."
+            elif "memory" in exc_str or "allocate" in exc_str or "oom" in exc_str:
+                phase = "RENDER_MEMORY_OOM_SPIKE"
+                remediation = "Model weights exceeded Render 512MB RAM limit."
+            elif "quantize" in exc_str:
+                phase = "DYNAMIC_QUANTIZATION_TIMEOUT"
+                remediation = "Check deploy.log for [TELEMETRY:MEMORY_OPT] flags."
+            else:
+                phase = "INFERENCE_EXECUTION_FAULT"
+                remediation = "Check deploy.log for core Python crash dumps."
+                
             return JSONResponse(
                 status_code=503,
                 content={
                     "detail": "Analysis Engine Failure",
-                    "phase": "UNKNOWN_INFERENCE_CRASH",
+                    "phase": phase,
                     "hardware_state": {"cpu_threads": 1, "memory_pressure": "HIGH"},
-                    "remediation": "Check deploy.log for core Python crash dumps.",
+                    "remediation": remediation,
                     "error_message": str(exc)
                 }
             )
@@ -221,8 +226,6 @@ async def predict(
         )
         return response
 
-    except HTTPException:
-        raise  # Already handled above
     except Exception as exc:
         logger.error(
             "[predict] Unexpected FAILED — reason: %s", str(exc), exc_info=True

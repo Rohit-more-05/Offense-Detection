@@ -76,8 +76,60 @@ boot_and_test() {
         fi
     fi
 
-    # Background the Python server
+    # --------------------------------------------------------------------------
+    # DEVSECOPS: Pre-Deployment Simulation & Triage Block
+    # --------------------------------------------------------------------------
     export PYTHONPATH="$PWD/backend:$PYTHONPATH"
+    log_trace "INFO" "deploy.sh/sim" "Running standalone Python simulation to test HF_TOKEN and Accelerate allocations..."
+    
+    set +e
+    $PYTHON_CMD -c "
+import os, sys
+try:
+    print('[DEVSECOPS:TEST] Checking environment and Hugging Face token availability...')
+    if not os.getenv('HF_TOKEN'):
+        print('[DEVSECOPS:FAIL] HF_TOKEN variable is completely missing or empty!')
+        sys.exit(2)
+    from transformers import AutoTokenizer, AutoModelForSequenceClassification
+    import torch
+    print('[DEVSECOPS:TEST] Attempting micro-allocation weights load test...')
+    # Simulate configuration used in text_inference.py
+    _ = AutoModelForSequenceClassification.from_pretrained(
+        'am4nsolanki/autonlp-text-hateful-memes-36789092',
+        low_cpu_mem_usage=True
+    )
+    print('[DEVSECOPS:SUCCESS] Localized initialization simulation passed.')
+except ImportError as e:
+    print(f'[DEVSECOPS:FAIL] Dependency error caught during simulation: {str(e)}')
+    sys.exit(3)
+except Exception as e:
+    print(f'[DEVSECOPS:FAIL] Critical runtime error mapping weights: {str(e)}')
+    sys.exit(4)
+" >> "$LOG_FILE" 2>&1
+    local SIM_EXIT=$?
+    set -e
+
+    if [ $SIM_EXIT -eq 2 ]; then
+        log_trace "CRITICAL" "deploy.sh/sim" "[CRITICAL] Deployment halted. Hugging Face token is not set in Render dashboard environment variables."
+        exit 1
+    elif [ $SIM_EXIT -eq 3 ]; then
+        log_trace "WARNING" "deploy.sh/sim" "Missing dependency tracking (accelerate). Self-healing..."
+        $PYTHON_CMD -m pip install accelerate optimum bitsandbytes
+        rm -rf ~/.cache/huggingface/hub/* 2>/dev/null || true
+        return 1
+    elif [ $SIM_EXIT -eq 4 ]; then
+        log_trace "ERROR" "deploy.sh/sim" "Model structural failure or OOM kill during simulation."
+        if command -v free &> /dev/null; then
+            free -h >> "$LOG_FILE"
+        fi
+        tail -n 30 "$LOG_FILE"
+        exit 1
+    elif [ $SIM_EXIT -ne 0 ]; then
+        log_trace "ERROR" "deploy.sh/sim" "Unknown simulation failure (Exit: $SIM_EXIT)."
+        return 1
+    fi
+
+    # Background the Python server
     $PYTHON_CMD -m uvicorn app.main:app --app-dir backend --host 0.0.0.0 --port $PORT >> "$LOG_FILE" 2>&1 &
     local API_PID=$!
     log_trace "DEBUG" "deploy.sh/boot" "Process $API_PID spawned. Waiting for socket binding..."
