@@ -36,7 +36,9 @@ try:
         _raw_url,
         pool_pre_ping=True,       # validates connections before use
         pool_size=5,
-        max_overflow=10,
+        max_overflow=0,           # Strictly prevent exceeding pool size (Phase 2 optimization)
+        pool_recycle=1800,        # Recycle connections after 30 mins to prevent stale drops
+        pool_timeout=30,          # Wait max 30s for a connection from the pool
         # psycopg3 connect_args: use connect_timeout (seconds)
         connect_args={"connect_timeout": 10},
     )
@@ -136,3 +138,13 @@ def init_db() -> None:
     except Exception as exc:
         logger.error("[init_db] FAILED — reason: %s", str(exc), exc_info=True)
         raise
+
+def close_db() -> None:
+    """Explicit database connection pool disposal method to prevent zombie leaks on shutdown."""
+    logger.info("[close_db] START — explicit database connection pool disposal triggered")
+    try:
+        engine.dispose()
+        logger.info("[close_db] SUCCESS — Engine disposed cleanly")
+    except Exception as exc:
+        logger.error("[close_db] FAILED — Error disposing engine: %s", str(exc), exc_info=True)
+

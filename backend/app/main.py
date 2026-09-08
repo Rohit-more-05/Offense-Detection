@@ -27,7 +27,7 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.config import get_settings
-from app.database import init_db, verify_connection, verify_predictions_table
+from app.database import init_db, verify_connection, verify_predictions_table, close_db
 from app.routers import predict as predict_router
 from app.routers import review as review_router
 
@@ -79,6 +79,8 @@ async def lifespan(app: FastAPI):
     logger.info("=" * 60)
     yield
     logger.info("🛑 Meme Detection API shutting down …")
+    close_db()
+    logger.info("=" * 60)
 
 
 # ── App instance ───────────────────────────────────────────────────────────────
