@@ -65,6 +65,7 @@ async def lifespan(app: FastAPI):
     logger.info("🚀 Meme Detection API starting up …")
     logger.info("   Environment : %s", settings.environment)
     logger.info("   Log level   : %s", settings.log_level)
+    logger.info("   Frontend UI : https://memeguard-frontend.onrender.com/")
 
     # 1. Verify Supabase connectivity
     verify_connection()

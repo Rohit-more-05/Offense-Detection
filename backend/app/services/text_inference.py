@@ -23,7 +23,9 @@ from __future__ import annotations
 import time
 from typing import Tuple
 
-import httpx
+import json
+import urllib.request
+import urllib.error
 
 from app.config import get_settings
 from app.logger import get_logger
@@ -95,19 +97,30 @@ def run(text: str) -> Tuple[str, float]:
     payload = {"inputs": text}
 
     try:
-        with httpx.Client(timeout=REQUEST_TIMEOUT) as client:
-            response = client.post(HF_API_URL, json=payload, headers=headers)
-
+        req = urllib.request.Request(
+            HF_API_URL,
+            data=json.dumps(payload).encode("utf-8"),
+            headers=headers,
+            method="POST"
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=REQUEST_TIMEOUT) as response:
+                status_code = response.getcode()
+                response_text = response.read().decode("utf-8")
+        except urllib.error.HTTPError as e:
+            status_code = e.code
+            response_text = e.read().decode("utf-8")
+            
         elapsed_ms = int((time.monotonic() - t_start) * 1000)
         logger.info(
             "[text_inference] [TELEMETRY:API_CALL:RESPONSE] "
             "HTTP %d | elapsed_ms=%d",
-            response.status_code, elapsed_ms
+            status_code, elapsed_ms
         )
 
         # ── Handle model cold-start (HF wakes sleeping models) ────────────────
-        if response.status_code == 503:
-            body = response.json()
+        if status_code == 503:
+            body = json.loads(response_text)
             if "loading" in str(body).lower() or "estimated_time" in body:
                 wait_s = body.get("estimated_time", 20)
                 logger.warning(
@@ -116,23 +129,29 @@ def run(text: str) -> Tuple[str, float]:
                     "Estimated wake-up: %ss. Retrying once...", wait_s
                 )
                 time.sleep(min(wait_s, 25))  # Cap wait at 25s
-                with httpx.Client(timeout=REQUEST_TIMEOUT) as client:
-                    response = client.post(HF_API_URL, json=payload, headers=headers)
+                
+                try:
+                    with urllib.request.urlopen(req, timeout=REQUEST_TIMEOUT) as response:
+                        status_code = response.getcode()
+                        response_text = response.read().decode("utf-8")
+                except urllib.error.HTTPError as e:
+                    status_code = e.code
+                    response_text = e.read().decode("utf-8")
+                    
                 elapsed_ms = int((time.monotonic() - t_start) * 1000)
                 logger.info(
                     "[text_inference] [TELEMETRY:API_CALL:RETRY] "
                     "Retry HTTP %d | total_elapsed_ms=%d",
-                    response.status_code, elapsed_ms
+                    status_code, elapsed_ms
                 )
 
-        if response.status_code != 200:
+        if status_code != 200:
             raise RuntimeError(
-                f"HuggingFace API returned HTTP {response.status_code}: {response.text[:300]}"
+                f"HuggingFace API returned HTTP {status_code}: {response_text[:300]}"
             )
 
         # ── Parse response ────────────────────────────────────────────────────
-        # Expected format: [[{"label": "LABEL_0", "score": 0.95}, {"label": "LABEL_1", ...}]]
-        result = response.json()
+        result = json.loads(response_text)
         logger.debug("[text_inference] [TELEMETRY:API_CALL] Raw response: %r", result)
 
         # Flatten one level of nesting if needed
@@ -166,28 +185,27 @@ def run(text: str) -> Tuple[str, float]:
 
         return label, confidence
 
-    except httpx.TimeoutException as exc:
+    except (urllib.error.URLError, TimeoutError) as exc:
         elapsed_ms = int((time.monotonic() - t_start) * 1000)
-        logger.error(
-            "[text_inference] [TELEMETRY:API_CALL:FAILED] "
-            "TIMEOUT after %dms — HuggingFace API did not respond within %ss. "
-            "Model may still be cold-starting.",
-            elapsed_ms, REQUEST_TIMEOUT
-        )
-        raise RuntimeError(
-            f"HuggingFace Inference API timed out after {REQUEST_TIMEOUT}s. "
-            "The model may be cold-starting. Please retry in 30 seconds."
-        ) from exc
-
-    except httpx.RequestError as exc:
-        elapsed_ms = int((time.monotonic() - t_start) * 1000)
-        logger.error(
-            "[text_inference] [TELEMETRY:API_CALL:FAILED] "
-            "Network error after %dms — %s", elapsed_ms, str(exc)
-        )
-        raise RuntimeError(
-            f"Network error contacting HuggingFace API: {exc}"
-        ) from exc
+        if isinstance(exc.reason, TimeoutError) or isinstance(exc, TimeoutError):
+            logger.error(
+                "[text_inference] [TELEMETRY:API_CALL:FAILED] "
+                "TIMEOUT after %dms — HuggingFace API did not respond within %ss. "
+                "Model may still be cold-starting.",
+                elapsed_ms, REQUEST_TIMEOUT
+            )
+            raise RuntimeError(
+                f"HuggingFace Inference API timed out after {REQUEST_TIMEOUT}s. "
+                "The model may be cold-starting. Please retry in 30 seconds."
+            ) from exc
+        else:
+            logger.error(
+                "[text_inference] [TELEMETRY:API_CALL:FAILED] "
+                "Network error after %dms — %s", elapsed_ms, str(exc.reason)
+            )
+            raise RuntimeError(
+                f"Network error contacting HuggingFace API: {exc.reason}"
+            ) from exc
 
     except RuntimeError:
         raise  # Already formatted above
