@@ -1,44 +1,31 @@
 """
 text_inference.py  (api-inference branch)
 ==========================================
-HuggingFace Inference API edition.
+HuggingFace Inference API edition — Render DNS Bypass via DoH.
 
-ARCHITECTURAL CHANGE vs main branch:
-  - REMOVED: PyTorch, transformers, local model weights (~600 MB)
-  - ADDED:   Lightweight httpx POST to HuggingFace Inference API (~0 MB)
+RENDER FREE TIER FIX:
+  Render's free tier blocks outbound system DNS (getaddrinfo → Errno -5).
+  This version resolves the HuggingFace API IP using DNS-over-HTTPS (DoH)
+  via Cloudflare 1.1.1.1, which IS reachable even when system DNS is broken.
+  It then opens a raw SSL socket directly to the resolved IP, bypassing
+  the OS-level DNS resolver entirely.
 
-The same model is used:
-  am4nsolanki/autonlp-text-hateful-memes-36789092
+  ALSO: api-inference.huggingface.co has no DNS A records.
+  The active HF endpoint is: router.huggingface.co
 
-But instead of loading 400MB weights into Render's 512MB RAM container,
-we simply send a 100-byte JSON payload to HuggingFace's cloud GPU servers
-and receive the label + confidence back.
-
-Memory usage on Render: < 100 MB (vs > 600 MB before)
-Cold-start time:         < 2 s  (vs > 40 s before)
+Memory usage on Render: < 100 MB
+Cold-start time:         < 2 s
 """
 
 from __future__ import annotations
 
-import time
-from typing import Tuple
-
 import json
-import urllib.request
-import urllib.error
 import socket
-
-# ── Render IPv6 DNS Patch ──────────────────────────────────────────────────────
-# Render's free tier occasionally fails to resolve hostnames if the HTTP library
-# attempts an IPv6 (AF_INET6) lookup. This forces IPv4 (AF_INET) at the query level.
-_original_getaddrinfo = socket.getaddrinfo
-
-def _ipv4_getaddrinfo(host, port, family=0, type=0, proto=0, flags=0):
-    # Force the query to ONLY ask for IPv4, preventing the AAAA DNS drop bug on Render
-    return _original_getaddrinfo(host, port, socket.AF_INET, type, proto, flags)
-
-socket.getaddrinfo = _ipv4_getaddrinfo
-# ───────────────────────────────────────────────────────────────────────────────
+import ssl
+import time
+import urllib.error
+import urllib.request
+from typing import Optional, Tuple
 
 from app.config import get_settings
 from app.logger import get_logger
@@ -46,21 +33,159 @@ from app.logger import get_logger
 logger = get_logger(__name__)
 
 # ── Constants ──────────────────────────────────────────────────────────────────
-MODEL_ID  = "am4nsolanki/autonlp-text-hateful-memes-36789092"
-HF_API_URL = f"https://api-inference.huggingface.co/models/{MODEL_ID}"
-LABEL_MAP  = {"LABEL_0": "Safe", "LABEL_1": "Harmful",
-              "safe": "Safe", "harmful": "Harmful",
-              "Safe": "Safe", "Harmful": "Harmful"}
+MODEL_ID    = "am4nsolanki/autonlp-text-hateful-memes-36789092"
 
-# Timeout: 30s covers model cold-start wake-up on HF free inference
+# HuggingFace migrated inference to router.huggingface.co
+# api-inference.huggingface.co has no A records as of 2026
+HF_HOSTNAME = "router.huggingface.co"
+HF_PATH     = f"/models/{MODEL_ID}"
+HF_PORT     = 443
+
+LABEL_MAP   = {
+    "LABEL_0": "Safe",   "LABEL_1": "Harmful",
+    "safe":    "Safe",   "harmful": "Harmful",
+    "Safe":    "Safe",   "Harmful": "Harmful",
+}
 REQUEST_TIMEOUT = 30.0
+
+# Cloudflare DoH IPs — these need NO DNS resolution (hardcoded IPs)
+DOH_URLS = [
+    ("1.1.1.1", "https://1.1.1.1/dns-query"),    # Cloudflare
+    ("8.8.8.8", "https://8.8.8.8/dns-query"),     # Google
+]
+
+# Cache the resolved IP so we don't DoH-query on every request
+_hf_resolved_ip: Optional[str] = None
 
 logger.info(
     "[text_inference] [TELEMETRY:MODULE_IMPORT] "
     "api-inference edition loaded | model_id=%r | "
-    "inference_mode=HUGGINGFACE_API | memory_overhead=ZERO",
+    "inference_mode=HUGGINGFACE_ROUTER_DOH_BYPASS | memory_overhead=ZERO",
     MODEL_ID
 )
+
+
+def _resolve_via_doh(hostname: str) -> str:
+    """
+    Resolve a hostname to IPv4 using DNS-over-HTTPS via Cloudflare 1.1.1.1.
+    Completely bypasses the broken system DNS on Render free tier.
+    The DoH servers are accessed by hardcoded IP — no DNS needed for them.
+    """
+    ctx = ssl.create_default_context()
+    ctx.check_hostname = False
+    ctx.verify_mode = ssl.CERT_NONE
+
+    for doh_ip, doh_url in DOH_URLS:
+        try:
+            url = f"{doh_url}?name={hostname}&type=A"
+            req = urllib.request.Request(
+                url,
+                headers={"accept": "application/dns-json"},
+                method="GET"
+            )
+            with urllib.request.urlopen(req, timeout=10, context=ctx) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+
+            if data.get("Status") == 0 and "Answer" in data:
+                for answer in data["Answer"]:
+                    if answer.get("type") == 1:  # A record = IPv4
+                        ip = answer["data"].strip()
+                        logger.info(
+                            "[text_inference] [DOH] Resolved %s → %s via DoH %s",
+                            hostname, ip, doh_ip
+                        )
+                        return ip
+        except Exception as e:
+            logger.warning("[text_inference] [DOH] Failed via %s: %s", doh_ip, e)
+            continue
+
+    raise RuntimeError(
+        f"[DOH_RESOLUTION_FAILED] Could not resolve {hostname} via DoH. "
+        "Render may be blocking outbound HTTPS to 1.1.1.1 and 8.8.8.8."
+    )
+
+
+def _get_hf_ip() -> str:
+    """Return cached resolved IP, or resolve fresh via DoH."""
+    global _hf_resolved_ip
+    if _hf_resolved_ip is None:
+        _hf_resolved_ip = _resolve_via_doh(HF_HOSTNAME)
+    return _hf_resolved_ip
+
+
+def _make_raw_https_request(
+    ip: str,
+    hostname: str,
+    port: int,
+    path: str,
+    method: str,
+    headers: dict,
+    body: bytes,
+    timeout: float,
+) -> Tuple[int, str]:
+    """
+    Open a raw SSL socket to the given IP with the correct Host/SNI header.
+    This completely avoids DNS resolution — connects directly to the IP.
+    """
+    ctx = ssl.create_default_context()
+    raw_sock = socket.create_connection((ip, port), timeout=timeout)
+    ssl_sock = ctx.wrap_socket(raw_sock, server_hostname=hostname)
+
+    try:
+        header_lines = "\r\n".join(f"{k}: {v}" for k, v in headers.items())
+        request_str = (
+            f"{method} {path} HTTP/1.1\r\n"
+            f"Host: {hostname}\r\n"
+            f"Connection: close\r\n"
+            f"Content-Length: {len(body)}\r\n"
+            f"{header_lines}\r\n"
+            f"\r\n"
+        )
+        ssl_sock.sendall(request_str.encode("utf-8") + body)
+
+        response_bytes = b""
+        while True:
+            chunk = ssl_sock.recv(8192)
+            if not chunk:
+                break
+            response_bytes += chunk
+    finally:
+        ssl_sock.close()
+
+    header_end = response_bytes.find(b"\r\n\r\n")
+    if header_end == -1:
+        raise RuntimeError("Malformed HTTP response from HuggingFace API")
+
+    header_part = response_bytes[:header_end].decode("utf-8", errors="replace")
+    body_bytes  = response_bytes[header_end + 4:]
+
+    status_line = header_part.split("\r\n")[0]
+    status_code = int(status_line.split(" ")[1])
+
+    if "transfer-encoding: chunked" in header_part.lower():
+        body_str = _decode_chunked(body_bytes).decode("utf-8", errors="replace")
+    else:
+        body_str = body_bytes.decode("utf-8", errors="replace")
+
+    return status_code, body_str
+
+
+def _decode_chunked(data: bytes) -> bytes:
+    """Decode HTTP chunked transfer encoding."""
+    result = b""
+    while data:
+        crlf = data.find(b"\r\n")
+        if crlf == -1:
+            break
+        try:
+            chunk_size = int(data[:crlf].strip(), 16)
+        except ValueError:
+            break
+        if chunk_size == 0:
+            break
+        result += data[crlf + 2: crlf + 2 + chunk_size]
+        data = data[crlf + 2 + chunk_size + 2:]
+    return result
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -70,20 +195,7 @@ logger.info(
 def run(text: str) -> Tuple[str, float]:
     """
     Classify a meme caption via the HuggingFace Inference API.
-
-    Parameters
-    ----------
-    text : str  Caption / OCR text extracted from the meme.
-
-    Returns
-    -------
-    (label, confidence) : Tuple[str, float]
-        label      — "Harmful" | "Safe"
-        confidence — softmax probability of the winning class ∈ [0.0, 1.0]
-
-    Raises
-    ------
-    RuntimeError — on API failure, timeout, or unexpected response format.
+    Uses DoH + raw SSL sockets to bypass Render's broken system DNS.
     """
     settings = get_settings()
     api_key  = settings.huggingface_api_key
@@ -96,132 +208,107 @@ def run(text: str) -> Tuple[str, float]:
         MODEL_ID, len(text), text[:80]
     )
 
-    headers = {"Content-Type": "application/json"}
+    req_headers = {"Content-Type": "application/json"}
     if api_key:
-        headers["Authorization"] = f"Bearer {api_key}"
+        req_headers["Authorization"] = f"Bearer {api_key}"
         logger.debug("[text_inference] [TELEMETRY:API_CALL] Auth header attached.")
     else:
         logger.warning(
             "[text_inference] [TELEMETRY:API_CALL] "
-            "No HUGGINGFACE_API_KEY found — sending unauthenticated request. "
-            "Rate limits will apply. Set HUGGINGFACE_API_KEY in Render env vars."
+            "No HUGGINGFACE_API_KEY — sending unauthenticated. Rate limits apply."
         )
 
-    payload = {"inputs": text}
+    payload = json.dumps({"inputs": text}).encode("utf-8")
 
     try:
-        req = urllib.request.Request(
-            HF_API_URL,
-            data=json.dumps(payload).encode("utf-8"),
-            headers=headers,
-            method="POST"
+        # Step 1: Resolve IP via DoH — bypass broken Render system DNS
+        hf_ip = _get_hf_ip()
+        logger.info("[text_inference] [DOH] Connecting directly to IP: %s", hf_ip)
+
+        # Step 2: POST directly to the resolved IP via raw SSL socket
+        status_code, response_text = _make_raw_https_request(
+            ip=hf_ip,
+            hostname=HF_HOSTNAME,
+            port=HF_PORT,
+            path=HF_PATH,
+            method="POST",
+            headers=req_headers,
+            body=payload,
+            timeout=REQUEST_TIMEOUT,
         )
-        try:
-            with urllib.request.urlopen(req, timeout=REQUEST_TIMEOUT) as response:
-                status_code = response.getcode()
-                response_text = response.read().decode("utf-8")
-        except urllib.error.HTTPError as e:
-            status_code = e.code
-            response_text = e.read().decode("utf-8")
-            
+
         elapsed_ms = int((time.monotonic() - t_start) * 1000)
         logger.info(
-            "[text_inference] [TELEMETRY:API_CALL:RESPONSE] "
-            "HTTP %d | elapsed_ms=%d",
+            "[text_inference] [TELEMETRY:API_CALL:RESPONSE] HTTP %d | elapsed_ms=%d",
             status_code, elapsed_ms
         )
 
-        # ── Handle model cold-start (HF wakes sleeping models) ────────────────
+        # Handle HF model cold-start (503 + estimated_time in body)
         if status_code == 503:
-            body = json.loads(response_text)
-            if "loading" in str(body).lower() or "estimated_time" in body:
-                wait_s = body.get("estimated_time", 20)
-                logger.warning(
-                    "[text_inference] [TELEMETRY:API_CALL] "
-                    "Model is cold-starting on HuggingFace servers. "
-                    "Estimated wake-up: %ss. Retrying once...", wait_s
-                )
-                time.sleep(min(wait_s, 25))  # Cap wait at 25s
-                
-                try:
-                    with urllib.request.urlopen(req, timeout=REQUEST_TIMEOUT) as response:
-                        status_code = response.getcode()
-                        response_text = response.read().decode("utf-8")
-                except urllib.error.HTTPError as e:
-                    status_code = e.code
-                    response_text = e.read().decode("utf-8")
-                    
-                elapsed_ms = int((time.monotonic() - t_start) * 1000)
-                logger.info(
-                    "[text_inference] [TELEMETRY:API_CALL:RETRY] "
-                    "Retry HTTP %d | total_elapsed_ms=%d",
-                    status_code, elapsed_ms
-                )
+            try:
+                body_json = json.loads(response_text)
+                if "loading" in str(body_json).lower() or "estimated_time" in body_json:
+                    wait_s = min(body_json.get("estimated_time", 20), 25)
+                    logger.warning(
+                        "[text_inference] HF model cold-starting. Waiting %ss then retrying...",
+                        wait_s
+                    )
+                    time.sleep(wait_s)
+                    status_code, response_text = _make_raw_https_request(
+                        ip=hf_ip, hostname=HF_HOSTNAME, port=HF_PORT,
+                        path=HF_PATH, method="POST",
+                        headers=req_headers, body=payload, timeout=REQUEST_TIMEOUT,
+                    )
+                    elapsed_ms = int((time.monotonic() - t_start) * 1000)
+                    logger.info(
+                        "[text_inference] [TELEMETRY:API_CALL:RETRY] HTTP %d | elapsed_ms=%d",
+                        status_code, elapsed_ms
+                    )
+            except (json.JSONDecodeError, KeyError, AttributeError):
+                pass
+
+        if status_code == 401:
+            raise RuntimeError(
+                "[HF_AUTH_ERROR] HuggingFace returned 401 Unauthorized. "
+                "Check HUGGINGFACE_API_KEY is correctly set in Render env vars."
+            )
 
         if status_code != 200:
             raise RuntimeError(
                 f"HuggingFace API returned HTTP {status_code}: {response_text[:300]}"
             )
 
-        # ── Parse response ────────────────────────────────────────────────────
+        # Parse response
         result = json.loads(response_text)
         logger.debug("[text_inference] [TELEMETRY:API_CALL] Raw response: %r", result)
 
-        # Flatten one level of nesting if needed
-        if isinstance(result, list) and isinstance(result[0], list):
+        if isinstance(result, list) and len(result) > 0 and isinstance(result[0], list):
             result = result[0]
 
         if not isinstance(result, list) or len(result) == 0:
             raise RuntimeError(f"Unexpected API response format: {result}")
 
-        # Pick the highest-score label
-        best = max(result, key=lambda x: x.get("score", 0))
+        best       = max(result, key=lambda x: x.get("score", 0))
         raw_label  = best.get("label", "")
         confidence = round(float(best.get("score", 0.0)), 6)
 
         label = LABEL_MAP.get(raw_label)
         if label is None:
-            # Last-resort mapping: if label contains "1" → Harmful, else Safe
             label = "Harmful" if "1" in raw_label else "Safe"
             logger.warning(
-                "[text_inference] [TELEMETRY:API_CALL] "
-                "Unknown raw label %r — mapped to %r", raw_label, label
+                "[text_inference] Unknown raw label %r — mapped to %r", raw_label, label
             )
 
         elapsed_ms = int((time.monotonic() - t_start) * 1000)
         logger.info(
             "[text_inference] [TELEMETRY:API_CALL:COMPLETE] "
-            "status=SUCCESS | label=%r | confidence=%.6f | "
-            "elapsed_ms=%d | model_id=%r",
-            label, confidence, elapsed_ms, MODEL_ID
+            "status=SUCCESS | label=%r | confidence=%.6f | elapsed_ms=%d",
+            label, confidence, elapsed_ms
         )
-
         return label, confidence
 
-    except (urllib.error.URLError, TimeoutError) as exc:
-        elapsed_ms = int((time.monotonic() - t_start) * 1000)
-        if isinstance(exc.reason, TimeoutError) or isinstance(exc, TimeoutError):
-            logger.error(
-                "[text_inference] [TELEMETRY:API_CALL:FAILED] "
-                "TIMEOUT after %dms — HuggingFace API did not respond within %ss. "
-                "Model may still be cold-starting.",
-                elapsed_ms, REQUEST_TIMEOUT
-            )
-            raise RuntimeError(
-                f"HuggingFace Inference API timed out after {REQUEST_TIMEOUT}s. "
-                "The model may be cold-starting. Please retry in 30 seconds."
-            ) from exc
-        else:
-            logger.error(
-                "[text_inference] [TELEMETRY:API_CALL:FAILED] "
-                "Network error after %dms — %s", elapsed_ms, str(exc.reason)
-            )
-            raise RuntimeError(
-                f"Network error contacting HuggingFace API: {exc.reason}"
-            ) from exc
-
     except RuntimeError:
-        raise  # Already formatted above
+        raise
 
     except Exception as exc:
         elapsed_ms = int((time.monotonic() - t_start) * 1000)
@@ -229,4 +316,4 @@ def run(text: str) -> Tuple[str, float]:
             "[text_inference] [TELEMETRY:API_CALL:FAILED] "
             "Unexpected error after %dms — %s", elapsed_ms, str(exc), exc_info=True
         )
-        raise RuntimeError(f"text_inference API call failed: {exc}") from exc
+        raise RuntimeError(f"text_inference call failed: {exc}") from exc
