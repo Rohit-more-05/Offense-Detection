@@ -1,7 +1,6 @@
 # ──────────────────────────────────────────────────────────────────────────────
-#  Meme Detection Backend — Python Dependencies (api-inference branch)
-#  PyTorch + transformers REMOVED — inference delegated to HuggingFace Inference API.
-#  Total backend install size: ~50MB (vs ~650MB with PyTorch)
+#  Meme Detection Backend — Python Dependencies
+#  Pin exact versions for reproducible installs: pip install -r requirements.txt
 # ──────────────────────────────────────────────────────────────────────────────
 
 # ── Web framework ──────────────────────────────────────────────────────────────
@@ -15,6 +14,7 @@ pydantic-settings==2.5.2
 # ── Database — SQLAlchemy 2.0 + PostgreSQL driver ─────────────────────────────
 sqlalchemy>=2.0.35,<3.0.0
 # psycopg3 (psycopg[binary]) — use instead of psycopg2 for Python 3.12+ / 3.14 support.
+# Ships pre-built wheels for modern Python; psycopg2-binary requires source build on 3.14.
 psycopg[binary]==3.2.10
 
 # ── Alembic migrations ────────────────────────────────────────────────────────
@@ -26,11 +26,21 @@ python-multipart==0.0.9
 # ── Environment variable loading ──────────────────────────────────────────────
 python-dotenv==1.0.1
 
-# ── HTTP client — used for HuggingFace Inference API calls ───────────────────
-# Replaces the entire torch+transformers stack for inference.
-# API call: POST https://api-inference.huggingface.co/models/<model-id>
-httpx>=0.27.0,<1.0.0
-
 # ── Testing ───────────────────────────────────────────────────────────────────
 pytest==8.3.2
+httpx==0.27.2
 pytest-asyncio==0.24.0
+
+# ── ML Inference — Real text-only hateful memes classifier ────────────────────
+# Model: am4nsolanki/autonlp-text-hateful-memes-36789092
+# BERT-based binary classifier trained on Facebook Hateful Memes dataset.
+# Weights are downloaded and cached once in ~/.cache/huggingface — zero cost/API after that.
+#
+# LAZY LOAD: Model is loaded on FIRST /predict call, NOT at server startup.
+# This prevents OOM and port-binding timeout on Render's 512MB free tier.
+#
+# CPU-ONLY torch: prevents pip from pulling 40MB+ NVIDIA CUDA packages (nvjitlink, cublas etc.)
+# which inflate memory usage and are useless without a GPU.
+--extra-index-url https://download.pytorch.org/whl/cpu
+torch==2.6.0+cpu
+transformers>=4.44.2,<5.0.0

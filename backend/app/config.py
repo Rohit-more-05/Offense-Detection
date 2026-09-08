@@ -38,10 +38,6 @@ class Settings(BaseSettings):
     # ── CORS ──────────────────────────────────────────────────────────────────
     cors_origins: List[str] = ["http://localhost:5173"]
 
-    # ── HuggingFace Inference API (api-inference branch) ──────────────────────
-    # Set HUGGINGFACE_API_KEY in Render environment variables.
-    huggingface_api_key: str = ""
-
 
 @lru_cache()
 def get_settings() -> Settings:
