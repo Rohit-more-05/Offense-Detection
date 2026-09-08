@@ -38,7 +38,7 @@ MODEL_ID    = "am4nsolanki/autonlp-text-hateful-memes-36789092"
 # HuggingFace migrated inference to router.huggingface.co
 # api-inference.huggingface.co has no A records as of 2026
 HF_HOSTNAME = "router.huggingface.co"
-HF_PATH     = f"/models/{MODEL_ID}"
+HF_PATH     = f"/hf-inference/models/{MODEL_ID}"
 HF_PORT     = 443
 
 LABEL_MAP   = {
