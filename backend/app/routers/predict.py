@@ -152,9 +152,12 @@ async def predict(
             )
 
         # ── Step 4: Route decision ─────────────────────────────────────────────
-        logger.info("[predict] Calling decision_router.route(confidence=%s)", confidence)
+        # Convert confidence into a probability of being Harmful.
+        # If the label is Safe, a high confidence means a low probability of harm.
+        harm_probability = confidence if label == "Harmful" else (1.0 - confidence)
+        logger.info("[predict] Calling decision_router.route(harm_probability=%s)", harm_probability)
         try:
-            moderation_decision = decision_router.route(confidence)
+            moderation_decision = decision_router.route(harm_probability)
         except ValueError as exc:
             logger.error("[predict] Decision routing FAILED — reason: %s", str(exc), exc_info=True)
             raise HTTPException(status_code=500, detail=f"Decision routing failed: {exc}")
