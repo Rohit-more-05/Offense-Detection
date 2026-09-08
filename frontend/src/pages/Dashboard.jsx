@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { Scan, Loader2, RotateCcw } from 'lucide-react';
 import UploadZone from '../components/UploadZone';
 import ResultsCard from '../components/ResultsCard';
-import { predictMeme } from '../api/client';
+import { predictMeme, checkHealth } from '../api/client';
 import { MIN_LOADING_MS } from '../utils/constants';
 
 /**
@@ -19,6 +19,23 @@ export default function Dashboard() {
   const [result, setResult] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
+  const [isBackendAlive, setIsBackendAlive] = useState(true);
+
+  // Proactive Health and Gateway Pre-Flight Check (Phase 3 Requirement)
+  useEffect(() => {
+    let mounted = true;
+    const verifyHealth = async () => {
+      const alive = await checkHealth();
+      if (mounted) setIsBackendAlive(alive);
+      
+      // Attempt self-healing reconnection polling if dead
+      if (!alive && mounted) {
+        setTimeout(verifyHealth, 5000);
+      }
+    };
+    verifyHealth();
+    return () => { mounted = false; };
+  }, []);
 
   const handleFileSelected = useCallback((file, url) => {
     console.log('[Dashboard] state: file selected —', file.name);
@@ -95,12 +112,19 @@ export default function Dashboard() {
           </div>
         )}
 
+        {/* System Degradation Notice */}
+        {!isBackendAlive && !error && (
+          <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-4 text-sm text-amber-300" id="health-warning">
+            ⚠️ System Degradation Notice: Connection to Render Inference Cluster timed out. Attempting automatic self-healing reconnection...
+          </div>
+        )}
+
         {/* Action buttons */}
         <div className="flex gap-3">
           <button
             id="btn-run-detection"
             onClick={handleSubmit}
-            disabled={!selectedFile || loading}
+            disabled={!selectedFile || loading || !isBackendAlive}
             className="flex flex-1 items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-violet-600 to-indigo-600 px-6 py-3 text-sm font-semibold text-white shadow-lg shadow-violet-500/20 hover:from-violet-500 hover:to-indigo-500 transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed disabled:shadow-none"
           >
             {loading ? (

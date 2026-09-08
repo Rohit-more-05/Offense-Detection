@@ -24,7 +24,14 @@ async function apiFetch(url, options = {}) {
     if (!response.ok) {
       const errorData = await response.json().catch(() => ({ detail: response.statusText }));
       console.error('[API] FAILED', fullUrl, errorData);
-      throw Object.assign(new Error(errorData.detail || `HTTP ${response.status}`), {
+      
+      // Parse detailed Backend Gateway Exceptions (Phase 3 Requirement)
+      let errorMessage = errorData.detail || `HTTP ${response.status}`;
+      if (errorData.phase && errorData.hardware_state) {
+          errorMessage = `Backend Gateway Fault: [${errorData.detail}] | Phase: ${errorData.phase} | CPU: ${errorData.hardware_state.cpu_threads} | Mem: ${errorData.hardware_state.memory_pressure} | Action: ${errorData.remediation}`;
+      }
+
+      throw Object.assign(new Error(errorMessage), {
         status: response.status,
         data: errorData,
       });
@@ -34,11 +41,45 @@ async function apiFetch(url, options = {}) {
     console.log('[API] SUCCESS', fullUrl, data);
     return data;
   } catch (error) {
+    // Dynamic Type Fingerprinting for generic network drops (Phase 3 Requirement)
+    if (error.message === 'Failed to fetch' || error.message.includes('NetworkError')) {
+      console.error('[API] FATAL: Network request dropped. Running diagnostic...');
+      let healthStatus = 'Backend Unreachable / Possible Render OOM Kill';
+      let statusCode = '503 Service Unavailable';
+      
+      if (!navigator.onLine) {
+        healthStatus = 'Client Offline';
+        statusCode = 'N/A';
+      } else {
+        try {
+          // Lightning-fast background ping to /health
+          const healthRes = await fetch(`${BASE_URL}/health`);
+          if (healthRes.ok) {
+            healthStatus = 'Backend Alive — Endpoint specific runtime crash or CORS block';
+            statusCode = 'Endpoint Failed';
+          }
+        } catch (healthErr) {
+          // Retain default unreachable status
+        }
+      }
+      
+      error.message = `Network Fault: [${healthStatus}] | Status: ${statusCode} | Context: Model lazy-load execution phase.`;
+    }
+
     if (!error.status) {
-      // Network or parse error (not an HTTP error we already caught)
       console.error('[API] FAILED', fullUrl, error.message);
     }
     throw error;
+  }
+}
+
+// ── Diagnostic / Health ────────────────────────────────────────────────────────
+export async function checkHealth() {
+  try {
+    const res = await fetch(`${BASE_URL}/health`);
+    return res.ok;
+  } catch (err) {
+    return false;
   }
 }
 

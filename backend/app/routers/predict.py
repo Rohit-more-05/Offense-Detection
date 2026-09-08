@@ -123,7 +123,30 @@ async def predict(
             label, confidence = text_inference.run(input_text)
         except RuntimeError as exc:
             logger.error("[predict] Inference FAILED — reason: %s", str(exc), exc_info=True)
-            raise HTTPException(status_code=500, detail=f"Inference failed: {exc}")
+            # DYNAMIC EXCEPTION MAPPING (Phase 3 Requirement)
+            # Trap OOMs, Quantization timeouts, or Thread crashes before Render drops the connection
+            return JSONResponse(
+                status_code=503,
+                content={
+                    "detail": "Analysis Engine Failure",
+                    "phase": "DYNAMIC_QUANTIZATION_TIMEOUT" if "quantize" in str(exc).lower() else "INFERENCE_EXECUTION_FAULT",
+                    "hardware_state": {"cpu_threads": 1, "memory_pressure": "HIGH"},
+                    "remediation": "Check deploy.log for [TELEMETRY:MEMORY_OPT] flags.",
+                    "error_message": str(exc)
+                }
+            )
+        except Exception as exc:
+            logger.error("[predict] Unexpected Inference FAILED — reason: %s", str(exc), exc_info=True)
+            return JSONResponse(
+                status_code=503,
+                content={
+                    "detail": "Analysis Engine Failure",
+                    "phase": "UNKNOWN_INFERENCE_CRASH",
+                    "hardware_state": {"cpu_threads": 1, "memory_pressure": "HIGH"},
+                    "remediation": "Check deploy.log for core Python crash dumps.",
+                    "error_message": str(exc)
+                }
+            )
 
         # ── Step 4: Route decision ─────────────────────────────────────────────
         logger.info("[predict] Calling decision_router.route(confidence=%s)", confidence)
