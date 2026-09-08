@@ -100,7 +100,7 @@ class TestPredict:
                 errors.append(f"HUMAN_REVIEW but confidence={c} out of band")
         assert not errors, f"Decision/confidence inconsistencies: {errors}"
 
-    @patch("pytesseract.image_to_string")
+    @patch("app.routers.predict.ocr_service.extract_text")
     def test_predict_visual_only_fallback_on_empty_text(self, mock_ocr):
         """
         Upload a test image containing no embedded text (e.g., a plain photo).
@@ -113,7 +113,7 @@ class TestPredict:
         assert body["label"] == "Safe"
         assert body["moderation_decision"] == "HUMAN_REVIEW"
         
-    @patch("pytesseract.image_to_string")
+    @patch("app.routers.predict.ocr_service.extract_text")
     def test_predict_extracts_offensive_text(self, mock_ocr):
         """
         Upload a test image with a known offensive text string burned into it.
