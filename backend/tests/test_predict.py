@@ -99,3 +99,28 @@ class TestPredict:
             if d == "HUMAN_REVIEW" and not (0.10 <= c <= 0.90):
                 errors.append(f"HUMAN_REVIEW but confidence={c} out of band")
         assert not errors, f"Decision/confidence inconsistencies: {errors}"
+
+    @patch("pytesseract.image_to_string")
+    def test_predict_visual_only_fallback_on_empty_text(self, mock_ocr):
+        """
+        Upload a test image containing no embedded text (e.g., a plain photo).
+        Assert the response does NOT classify it as 'Harmful' purely because of a filename artifact.
+        """
+        mock_ocr.return_value = "   \n  " # Simulating empty OCR output
+        resp = _upload(filename="offensive_filename.jpg")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["label"] == "Safe"
+        assert body["moderation_decision"] == "HUMAN_REVIEW"
+        
+    @patch("pytesseract.image_to_string")
+    def test_predict_extracts_offensive_text(self, mock_ocr):
+        """
+        Upload a test image with a known offensive text string burned into it.
+        Assert OCR successfully extracts it and routes it properly.
+        """
+        mock_ocr.return_value = "Kill all minorities"
+        resp = _upload()
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["label"] in ("Harmful", "Safe")

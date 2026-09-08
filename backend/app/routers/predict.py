@@ -29,7 +29,7 @@ from app.database import get_db
 from app.logger import get_logger
 from app.models.prediction import Prediction
 from app.schemas.predict import PredictResponse
-from app.services import decision_router, text_inference
+from app.services import decision_router, text_inference, ocr_service
 
 logger = get_logger(__name__)
 router = APIRouter(prefix="/predict", tags=["Prediction"])
@@ -99,25 +99,28 @@ async def predict(
         image_path_str = str(save_path)
 
         # ── Step 2: Resolve input text for the classifier ─────────────────────
-        # Phase 1: No OCR yet. Use manual_text_override when provided.
-        # Phase 2: Replace this block with EasyOCR extraction from image_path_str.
         if manual_text_override and manual_text_override.strip():
             input_text = manual_text_override.strip()
             logger.info(
                 "[predict] Text source=manual_text_override | length=%d", len(input_text)
             )
         else:
-            # Fallback: use the filename as a minimal text stub so inference always
-            # runs. Log a prominent warning — this is a Phase 1 limitation.
-            input_text = Path(file.filename or "unknown").stem.replace("_", " ")
-            logger.warning(
-                "[predict] No OCR yet — no manual_text_override provided. "
-                "Falling back to filename stub=%r. "
-                "Results will be low-quality until Phase 2 OCR is wired in.",
-                input_text,
+            # Phase 2 OCR extraction
+            logger.info("[predict] Running Tesseract OCR on image...")
+            input_text = ocr_service.extract_text(image_path_str)
+            logger.info(
+                f"[predict] OCR completed. Extracted length: {len(input_text)}"
             )
 
         # ── Step 3: Real text inference (BERT hate-speech classifier) ──────────
+        is_visual_only = False
+        
+        # If we have almost no text, we shouldn't trust the text classifier to make a meaningful
+        # decision on it. But we still run inference to keep the pipeline intact, and just flag it.
+        if len(input_text.strip()) < 5:
+            logger.warning("[predict] Extracted text is too short (<5 chars). Will flag as visual-only.")
+            is_visual_only = True
+            
         logger.info("[predict] Calling text_inference.run() | input_chars=%d", len(input_text))
         try:
             label, confidence = text_inference.run(input_text)
@@ -161,7 +164,14 @@ async def predict(
 
         # ── Step 6: Persist to database & Security Criteria Tracing ────────────
         prediction_id = str(uuid.uuid4())
-        # Auto decisions are considered "reviewed" immediately (audit only)
+        
+        # If visual only, override label to "Safe" (or flag it for manual review depending on confidence)
+        # The directive says: tag the response with "visual-only flag, no text signal" case.
+        # We will append this to moderator_notes or moderation_decision.
+        if is_visual_only:
+            moderation_decision = "HUMAN_REVIEW"
+            label = "Safe" # Force safe so we don't ban users for empty text
+            
         is_reviewed = moderation_decision != "HUMAN_REVIEW"
         is_harmful = label == "Harmful"
 
