@@ -1,1 +1,1 @@
-# Backend app package
+# Empty init file to make app a package

@@ -225,7 +225,7 @@ export default function Dashboard() {
           Meme Harm Detection
         </h1>
         <p className="mt-2 text-slate-400 text-sm">
-          Upload a meme to classify it with AI inference.
+          Upload a meme to classify it with inference.
         </p>
 
         {/* Inline health status badge */}

@@ -36,7 +36,7 @@ class Settings(BaseSettings):
     auto_flag_threshold: float = 0.90
 
     # ── CORS ──────────────────────────────────────────────────────────────────
-    cors_origins: List[str] = ["http://localhost:5173"]
+    cors_origins: List[str] = ["http://localhost:5173", "http://localhost:5174"]
 
     # ── HuggingFace Inference API (api-inference branch) ──────────────────────
     # Set HUGGINGFACE_API_KEY in Render environment variables.

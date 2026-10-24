@@ -16,7 +16,7 @@ from __future__ import annotations
 import pytest
 
 # Import the real module — this triggers singleton load at test collection time.
-from app.services import text_inference
+from services import text_inference
 
 
 # ── Fixtures ───────────────────────────────────────────────────────────────────

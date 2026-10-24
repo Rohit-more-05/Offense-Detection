@@ -7,8 +7,8 @@ from sqlalchemy import Boolean, DateTime, Float, Integer, String
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
-from app.database import Base
-from app.logger import get_logger
+from core.database import Base
+from core.logger import get_logger
 
 logger = get_logger(__name__)
 

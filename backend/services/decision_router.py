@@ -16,8 +16,8 @@ from __future__ import annotations
 
 from typing import Literal
 
-from app.config import get_settings
-from app.logger import get_logger
+from core.config import get_settings
+from core.logger import get_logger
 
 logger = get_logger(__name__)
 

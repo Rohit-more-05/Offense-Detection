@@ -24,6 +24,11 @@ env/
 
 # ─── Backend ───────────────────────────────────────────────────────────────────
 backend/logs/
+backend/storage/uploads/*
+backend/storage/heatmaps/*
+!backend/storage/uploads/.gitkeep
+!backend/storage/heatmaps/.gitkeep
+!backend/storage/heatmaps/placeholder.png
 backend/app/storage/uploads/*
 backend/app/storage/heatmaps/*
 !backend/app/storage/uploads/.gitkeep

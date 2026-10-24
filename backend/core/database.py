@@ -6,8 +6,8 @@ import textwrap
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 
-from app.config import get_settings
-from app.logger import get_logger
+from core.config import get_settings
+from core.logger import get_logger
 
 logger = get_logger(__name__)
 
@@ -131,7 +131,7 @@ def init_db() -> None:
     logger.info("[init_db] START — running Base.metadata.create_all()")
     try:
         # Import models so their metadata is registered on Base before create_all
-        from app.models import prediction  # noqa: F401
+        from models import prediction  # noqa: F401
 
         Base.metadata.create_all(bind=engine)
         logger.info("[init_db] SUCCESS — all tables created/verified")

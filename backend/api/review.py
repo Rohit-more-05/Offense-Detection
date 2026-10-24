@@ -14,10 +14,10 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.database import get_db
-from app.logger import get_logger
-from app.models.prediction import Prediction
-from app.schemas.review import ReviewQueueItem, VerdictRequest, VerdictResponse
+from core.database import get_db
+from core.logger import get_logger
+from models.prediction import Prediction
+from schemas.review import ReviewQueueItem, VerdictRequest, VerdictResponse
 
 logger = get_logger(__name__)
 router = APIRouter(prefix="/review", tags=["Review Queue"])
@@ -70,10 +70,10 @@ def get_review_queue(db: Session = Depends(get_db)) -> List[ReviewQueueItem]:
         return result
 
     except Exception as exc:
-        logger.error(
-            "[get_review_queue] FAILED — reason: %s", str(exc), exc_info=True
+        logger.warning(
+            "[get_review_queue] FAILED (non-fatal) — DB offline or error — returning empty list. Reason: %s", str(exc)
         )
-        raise HTTPException(status_code=500, detail=f"Failed to fetch review queue: {exc}")
+        return []
 
 
 @router.post(

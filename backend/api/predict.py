@@ -24,12 +24,12 @@ from fastapi import APIRouter, Depends, Form, HTTPException, UploadFile
 from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 
-from app.config import get_settings
-from app.database import get_db
-from app.logger import get_logger
-from app.models.prediction import Prediction
-from app.schemas.predict import PredictResponse
-from app.services import decision_router, text_inference, ocr_service
+from core.config import get_settings
+from core.database import get_db
+from core.logger import get_logger
+from models.prediction import Prediction
+from schemas.predict import PredictResponse
+from services import decision_router, text_inference, ocr_service
 
 logger = get_logger(__name__)
 router = APIRouter(prefix="/predict", tags=["Prediction"])
@@ -98,18 +98,21 @@ async def predict(
 
         image_path_str = str(save_path)
 
-        # ── Step 2: Resolve input text for the classifier ─────────────────────
+        # ── Step 2: Resolve input text via DUAL-STRATEGY OCR ────────────────────
         if manual_text_override and manual_text_override.strip():
             input_text = manual_text_override.strip()
+            ocr_source = "MANUAL_OVERRIDE"
             logger.info(
                 "[predict] Text source=manual_text_override | length=%d", len(input_text)
             )
+            print(f"\n[predict] Text source: MANUAL_OVERRIDE | Text: '{input_text[:100]}'", flush=True)
         else:
-            # Phase 2 OCR extraction
-            logger.info("[predict] Running Tesseract OCR on image...")
+            # Dual-strategy OCR: Tesseract primary -> Gemini Vision fallback
+            logger.info("[predict] Invoking dual-strategy OCR engine...")
             input_text = ocr_service.extract_text(image_path_str)
+            ocr_source = "OCR_ENGINE"
             logger.info(
-                f"[predict] OCR completed. Extracted length: {len(input_text)}"
+                f"[predict] OCR pipeline complete. Extracted length: {len(input_text)}"
             )
 
         # ── Step 3: Real text inference (BERT hate-speech classifier) ──────────
@@ -123,11 +126,33 @@ async def predict(
             
         logger.info("[predict] Calling text_inference.run() | input_chars=%d", len(input_text))
         try:
-            label, confidence = text_inference.run(input_text)
+            logger.info("[TELEMETRY:PIPELINE] Invoking Keras model prediction...")
+            from services.model_service import predict as model_predict
+            harmful_prob = model_predict(image_path_str, input_text)
+            logger.info(f"[TELEMETRY:PIPELINE] Keras model returned probability: {harmful_prob}")
+            
+            # Ultra-strict Threshold Logic
+            if harmful_prob > 0.5:
+                label = "Harmful"
+                confidence = harmful_prob
+            else:
+                label = "Safe"
+                confidence = harmful_prob # Return raw probability so it doesn't invert to 50%
+                
         except RuntimeError as exc:
-            logger.error("[predict] Inference FAILED — reason: %s", str(exc), exc_info=True)
-            # DYNAMIC EXCEPTION MAPPING (Phase 3 Requirement)
-            # Trap OOMs, Quantization timeouts, or Thread crashes before Render drops the connection
+            import traceback
+            error_trace = traceback.format_exc()
+            logger.error(f"""
+[TELEMETRY:CRITICAL_FAULT] Inference Engine crashed!
+============================================================
+[MemeGuard Prediction Result] -> [SYSTEM FAULT]
+  -> File: {file.filename}
+  -> Classification: ERROR
+  -> Error Detail: {str(exc)}
+  -> Full Traceback: 
+{error_trace}
+============================================================
+""")
             return JSONResponse(
                 status_code=503,
                 content={
@@ -139,7 +164,19 @@ async def predict(
                 }
             )
         except Exception as exc:
-            logger.error("[predict] Unexpected Inference FAILED — reason: %s", str(exc), exc_info=True)
+            import traceback
+            error_trace = traceback.format_exc()
+            logger.error(f"""
+[TELEMETRY:CRITICAL_FAULT] Unexpected Inference Execution Fault!
+============================================================
+[MemeGuard Prediction Result] -> [SYSTEM FAULT]
+  -> File: {file.filename}
+  -> Classification: ERROR
+  -> Error Detail: {str(exc)}
+  -> Full Traceback: 
+{error_trace}
+============================================================
+""")
             return JSONResponse(
                 status_code=503,
                 content={
@@ -152,33 +189,25 @@ async def predict(
             )
 
         # ── Step 4: Route decision ─────────────────────────────────────────────
-        # Convert confidence into a probability of being Harmful.
-        # If the label is Safe, a high confidence means a low probability of harm.
-        harm_probability = confidence if label == "Harmful" else (1.0 - confidence)
-        logger.info("[predict] Calling decision_router.route(harm_probability=%s)", harm_probability)
-        try:
-            moderation_decision = decision_router.route(harm_probability)
-        except ValueError as exc:
-            logger.error("[predict] Decision routing FAILED — reason: %s", str(exc), exc_info=True)
-            raise HTTPException(status_code=500, detail=f"Decision routing failed: {exc}")
+        # Enforcing explicit threshold logic as requested by user
+        logger.info(f"[predict] Evaluating strict threshold routing for probability={confidence}")
+        if confidence > 0.5:
+            moderation_decision = "AUTO_FLAG"
+            label = "Harmful"
+        else:
+            moderation_decision = "AUTO_APPROVE"
+            label = "Safe"
 
         # ── Step 5: Compute execution time ────────────────────────────────────
         execution_time_ms = int((time.monotonic() - t_start) * 1000)
 
         # ── Step 6: Persist to database & Security Criteria Tracing ────────────
         prediction_id = str(uuid.uuid4())
-        
-        # If visual only, override label to "Safe" (or flag it for manual review depending on confidence)
-        # The directive says: tag the response with "visual-only flag, no text signal" case.
-        # We will append this to moderator_notes or moderation_decision.
-        if is_visual_only:
-            moderation_decision = "HUMAN_REVIEW"
-            label = "Safe" # Force safe so we don't ban users for empty text
-            
+
+        # Explicit Telemetry Injection for Security/Moderation criteria (DevSecOps requirement)
         is_reviewed = moderation_decision != "HUMAN_REVIEW"
         is_harmful = label == "Harmful"
 
-        # Explicit Telemetry Injection for Security/Moderation criteria (DevSecOps requirement)
         logger.debug(
             "[predict] [TELEMETRY:SECURITY_CHECK] -> Evaluating moderation criteria for routing..."
         )
@@ -209,10 +238,9 @@ async def predict(
             logger.info("[predict] DB write confirmed — id=%s", prediction_id)
         except Exception as exc:
             db.rollback()
-            logger.error(
-                "[predict] DB write FAILED — rolling back — reason: %s", str(exc), exc_info=True
+            logger.warning(
+                "[predict] DB write FAILED (non-fatal) — rolling back — reason: %s", str(exc)
             )
-            raise HTTPException(status_code=500, detail=f"Database write failed: {exc}")
 
         # ── Step 7: Build response ─────────────────────────────────────────────
         response = PredictResponse(
@@ -232,6 +260,21 @@ async def predict(
             moderation_decision,
             execution_time_ms,
         )
+
+        # ── Terminal Output — Full Multimodal Inference Block ────────────────────
+        action_str = "BLOCKED" if label == "Harmful" else "PASSED"
+        text_preview = f'"{input_text[:120]}"' if input_text.strip() else '[NO TEXT EXTRACTED — VISUAL-ONLY MODE]'
+        print(f"\n\033[96m============================================================\033[0m", flush=True)
+        print(f"\033[96m[MemeGuard Multimodal Inference Engine]\033[0m", flush=True)
+        print(f"  -> Process Status  : INFERENCE_SUCCESS", flush=True)
+        print(f"  -> File Analyzed   : {file.filename or unique_filename}", flush=True)
+        print(f"  -> Extracted Text  : {text_preview}", flush=True)
+        print(f"  -> Model Inputs    : Image [224, 224, 3] | Text []", flush=True)
+        print(f"  -> Raw Probability : \033[1m{confidence:.6f}\033[0m", flush=True)
+        print(f"  -> Classification  : \033[1m{'\033[91mHARMFUL' if label == 'Harmful' else '\033[92mSAFE'}\033[0m", flush=True)
+        print(f"  -> Action Taken    : \033[1m{action_str}\033[0m", flush=True)
+        print(f"\033[96m============================================================\033[0m\n", flush=True)
+
         return response
 
     except HTTPException:

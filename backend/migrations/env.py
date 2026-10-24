@@ -26,8 +26,8 @@ sys.path.insert(0, str(BACKEND_DIR))
 load_dotenv(BACKEND_DIR / ".env")
 
 # ── Import your models so Alembic sees the full metadata ──────────────────────
-from app.database import Base  # noqa: E402
-from app.models import prediction  # noqa: F401, E402  — registers model on Base
+from core.database import Base  # noqa: E402
+from models import prediction, scan_history  # noqa: F401, E402  — registers model on Base
 
 # ── Alembic Config object ──────────────────────────────────────────────────────
 config = context.config
