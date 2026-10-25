@@ -17,7 +17,7 @@ class ScanHistory(Base):
     __tablename__ = "scan_history"
 
     id: Mapped[str] = mapped_column(
-        UUID(as_uuid=False),
+        String(36),
         primary_key=True,
         default=lambda: str(uuid.uuid4()),
         index=True,

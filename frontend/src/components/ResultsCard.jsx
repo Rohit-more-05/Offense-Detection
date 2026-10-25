@@ -23,7 +23,7 @@ export default function ResultsCard({ result, originalPreview }) {
       <span className="text-xs text-slate-400">{result.execution_time_ms} ms</span>
     </div>
     <p className="text-sm text-slate-200" id="result-reason">{result.reason}</p>
-    <p className="text-xs text-slate-400">Decision source: {result.decision_source === 'context_verifier' ? 'Gemini contextual verification' : result.decision_source === 'baseline' ? 'Local multimodal model' : result.decision_source === 'input_scope' ? 'Input type check' : 'Manual review needed'}</p>
+    <p className="text-xs text-slate-400">Decision source: {result.decision_source === 'context_verifier' ? 'Contextual verification' : result.decision_source === 'baseline' ? 'Local multimodal model' : result.decision_source === 'input_scope' ? 'Input type check' : 'Manual review needed'}</p>
     <ModerationBanner decision={result.moderation_decision} persisted={result.persisted} />
     {!result.persisted && <p role="alert" className="rounded-lg bg-red-500/15 p-3 text-sm text-red-200">Not saved to the database. This upload cannot receive feedback until the connection is restored and you upload it again.</p>}
     {originalPreview && <img src={originalPreview} alt="Uploaded image" className="max-h-72 w-full rounded-lg object-contain" />}
@@ -35,9 +35,8 @@ export default function ResultsCard({ result, originalPreview }) {
     <details className="rounded-lg border border-slate-700 p-3">
       <summary className="cursor-pointer text-sm text-slate-300">Text used for analysis ({result.ocr_status})</summary>
       <p className="mt-2 whitespace-pre-wrap break-words text-sm text-slate-300" id="extracted-text">{result.extracted_text || 'No readable text.'}</p>
-      <p className="mt-2 text-xs text-slate-500">Source: {result.ocr_source}</p>
+      <p className="mt-2 text-xs text-slate-500">Source: {result.ocr_source?.toLowerCase().includes('gemini') ? 'Text Extraction' : (result.ocr_source || 'Text Extraction')}</p>
     </details>
-    {result.warnings?.length > 0 && <ul className="space-y-1 text-xs text-amber-300">{result.warnings.map((warning, i) => <li key={i}>{warning}</li>)}</ul>}
     <div className="border-t border-slate-700 pt-4">
       <p className="mb-2 text-sm text-slate-300">Correct this result for future training</p>
       <div className="flex flex-wrap gap-2">{['Non-Harmful', 'Harmful', 'Not a meme'].map(verdict => <button key={verdict} disabled={pending || !result.persisted}
