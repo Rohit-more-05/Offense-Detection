@@ -17,11 +17,7 @@
 
 ---
 
-## 👥 Project Team & Mentorship
-
-* **Project Mentor / Guide:** Prof. Er. Anand M. Bali
-* **Head of Department:** Dr. Ashfaq Shaikh
-* **Principal:** Dr. Mohammed Shafi Pathan
+## 👥 Project Team
 
 | Roll No. | Team Member | Primary Engineering Domain |
 | :--- | :--- | :--- |
