@@ -1,136 +1,114 @@
-<div align="center">
-  <img src="https://raw.githubusercontent.com/tandpfun/skill-icons/main/icons/React-Dark.svg" width="40" height="40" />
-  <img src="https://raw.githubusercontent.com/tandpfun/skill-icons/main/icons/FastAPI.svg" width="40" height="40" />
-  <img src="https://raw.githubusercontent.com/tandpfun/skill-icons/main/icons/PyTorch-Dark.svg" width="40" height="40" />
-  <img src="https://raw.githubusercontent.com/tandpfun/skill-icons/main/icons/PostgreSQL-Dark.svg" width="40" height="40" />
-  <img src="https://raw.githubusercontent.com/tandpfun/skill-icons/main/icons/TailwindCSS-Dark.svg" width="40" height="40" />
+# MemeGuard
 
-  <h1>🛡️ MemeGuard — Harmful Meme Detection System</h1>
-  <p><i>A full-stack, AI-powered platform designed to detect, flag, and manage harmful or offensive multimodal content using state-of-the-art NLP models.</i></p>
+React/Vite frontend, FastAPI backend, Supabase PostgreSQL, and a saved
+EfficientNetB0 + bidirectional LSTM harmful-meme baseline.
 
-  <p>
-    <a href="https://memeguard-frontend.onrender.com/"><img src="https://img.shields.io/badge/Live_Frontend-Render-46E3B7?style=for-the-badge&logo=render&logoColor=white" alt="Frontend Status"></a>
-    <a href="https://memeguard-backend.onrender.com/docs"><img src="https://img.shields.io/badge/Live_API_Docs-Swagger-85EA2D?style=for-the-badge&logo=swagger&logoColor=black" alt="API Status"></a>
-  </p>
-</div>
+## Run locally
 
----
+Use the `api-inference-2` branch. The API uses **8001** to avoid the other local
+project on 8000; the frontend uses 5173. `start_project.bat` starts both.
 
-## 🏗️ Architecture & Workflow
+From `backend`:
 
-The system is built on a modern **React/Vite** frontend and a **FastAPI** Python backend, backed by **Supabase PostgreSQL**. The core engine features a real-time NLP classification pipeline powered by a fine-tuned **BERT** model.
-
-```mermaid
-graph TD
-    %% Define styles
-    classDef frontend fill:#3b82f6,stroke:#1d4ed8,stroke-width:2px,color:#fff,rx:8px,ry:8px;
-    classDef backend fill:#10b981,stroke:#047857,stroke-width:2px,color:#fff,rx:8px,ry:8px;
-    classDef ml fill:#8b5cf6,stroke:#5b21b6,stroke-width:2px,color:#fff,rx:8px,ry:8px;
-    classDef db fill:#f59e0b,stroke:#b45309,stroke-width:2px,color:#fff,rx:8px,ry:8px;
-    classDef queue fill:#ef4444,stroke:#b91c1c,stroke-width:2px,color:#fff,rx:8px,ry:8px;
-    classDef render fill:#000000,stroke:#46E3B7,stroke-width:2px,color:#fff;
-
-    %% Nodes
-    User([👤 User / Moderator])
-    
-    subgraph Render Cloud Deployment
-        UI[⚛️ Frontend<br/>React + Vite + Tailwind]:::frontend
-        API[🚀 Backend API<br/>FastAPI Server]:::backend
-        ML["🧠 NLP Inference Engine<br/>HuggingFace BERT<br/>(Lazy-Loaded PyTorch)"]:::ml
-    end
-
-    DB[(🗄️ Supabase<br/>PostgreSQL)]:::db
-    Queue[⚠️ Human Review Queue<br/>Moderation Dashboard]:::queue
-
-    %% Relationships
-    User -- "Uploads Meme" --> UI
-    UI -- "POST /api/v1/predict" --> API
-    API -- "Text Extraction" --> ML
-    ML -- "Label + Confidence %" --> API
-    API -- "Persists Log" --> DB
-    
-    API -- "Confidence < 85%" --> Queue
-    API -- "Confidence >= 85%" --> User
-    
-    User -- "Reviews Pending Cases" --> Queue
-    Queue -- "Final Verdict (Block/Allow)" --> DB
+```powershell
+.venv\Scripts\python -m pip install -r requirements.txt
+# Configure .env using .env.example, then apply migrations:
+.venv\Scripts\python -m alembic upgrade head
+.venv\Scripts\python -m uvicorn main:app --port 8001
 ```
 
----
+From `frontend`:
 
-## 🌟 Key Features
-
-- **⚡ High-Performance Backend**: Built with **FastAPI** for asynchronous, high-throughput request handling. Includes dual-stream deployment telemetry.
-- **🧠 Real-Time NLP Inference**: Integrated with a fine-tuned HuggingFace BERT model (`autonlp-text-hateful-memes`). Designed with a **Lazy-Load Singleton** architecture to safely run PyTorch ML models within strict 512MB RAM cloud constraints.
-- **🎨 Dynamic Frontend**: Responsive, glassmorphism-inspired animated UI built with **React**, **Vite**, and **Tailwind CSS**.
-- **🗄️ Self-Evolving Schema**: Managed via **Alembic ORM Migrations** directly connected to a **Supabase PostgreSQL** cloud instance.
-- **⚖️ Intelligent Moderation Router**: Configurable confidence thresholds automatically route borderline or ambiguous memes to a dedicated **Human Review Queue**.
-
----
-
-## 📁 Repository Structure
-
-```text
-meme-detection/
-├── 📂 backend/               # FastAPI server, PyTorch Inference, DB migrations
-│   ├── 📂 app/               # Application core (routers, schemas, services)
-│   ├── 📂 migrations/        # Alembic revision scripts
-│   ├── 📄 requirements.txt   # CPU-optimized pinned dependencies
-│   └── 📄 .env               # Secrets (Not tracked)
-├── 📂 frontend/              # React application
-│   ├── 📂 src/               # React components, pages, context
-│   ├── 📄 package.json       # Node dependencies
-│   └── 📄 tailwind.config.js # Theming and Design Tokens
-├── 📄 deploy.sh              # Production-grade CI/CD pre-deployment orchestrator
-└── 📄 README.md              # You are here!
-```
-
----
-
-## 🚀 Quick Start Guide
-
-### 1. Database & Backend Setup
-
-```bash
-cd backend
-# Create and activate a virtual environment
-python -m venv .venv
-source .venv/bin/activate   # Linux/macOS
-# .venv\Scripts\activate    # Windows
-
-# Install CPU-optimized dependencies
-pip install -r requirements.txt
-
-# Run migrations to set up Supabase schema
-alembic upgrade head
-
-# Start FastAPI server
-uvicorn app.main:app --reload --port 8000
-```
-> **Tip:** API Docs available at `http://localhost:8000/docs`
-
-### 2. Frontend Setup
-
-```bash
-cd frontend
-# Install dependencies
+```powershell
 npm install
-
-# Start development server
+# Set VITE_API_BASE_URL=http://localhost:8001/api/v1 in .env
 npm run dev
 ```
-> **Tip:** Web App available at `http://localhost:5173`
 
----
+The health endpoint identifies `service: memeguard`; the UI rejects a healthy
+response from a different app. Database schema changes use Alembic, not startup
+`create_all`. Supabase transaction pooling uses `prepare_threshold=None`.
 
-## 🛣️ Project Roadmap
+## What actually makes a decision
 
-- [x] **Phase 1**: Full-stack setup, Supabase migrations, React UI, and Human Moderator Queue.
-- [x] **Phase 1.5**: **BERT NLP Integration**. Replaced mock inference with real PyTorch classification, including Render free-tier deployment optimizations (lazy-loading, CPU wheels, CVE patches).
-- [ ] **Phase 2**: Integration of **CLIP** and **BLIP-2** for multi-modal vision-language analysis (understanding the image *context* alongside text).
-- [ ] **Phase 3**: Explainable AI (**Grad-CAM heatmaps**) and EasyOCR text extraction.
+1. Validate the decoded image, size and format. Filenames are metadata only.
+2. Local RapidOCR detects and reads text; Tesseract is an installation fallback.
+   RapidOCR includes its OCR weights and does not require a cloud key.
+3. In the default hybrid mode, the existing Gemini connection checks input type
+   and the joint image/text context. This is a separate, external model.
+4. Keras receives RGB pixels at 224 x 224 in the 0..255 range and a string. Its
+   saved TextVectorization layer supplies the real 9,139-entry vocabulary and
+   64-token limit; EfficientNet performs its own rescaling.
+5. Preserve the raw Keras harmful-class score. Never present it as confidence in
+   a different contextual verdict. Disagreement, unreadable input, unknown scope
+   and unavailable verification require human review. Recognized non-memes get
+   `Not a meme`, which is not a statement that their content is harmless.
+6. Store the result, provenance, OCR text and deduplicated image bytes in Supabase.
+   Automatic decisions do not create human-reviewed training labels.
 
----
-<div align="center">
-  <i>Built for safe, scalable, and intelligent content moderation.</i>
-</div>
+Set `CONTEXT_VERIFICATION_ENABLED=false` to run local OCR + Keras without sending
+images to Gemini. This exposes the baseline's limitations; it is not a calibrated
+general image safety classifier. In hybrid mode, cloud quota/service failures
+produce `Needs review`, with the local output still available for inspection.
+
+Both `/api/v1/predict` and `/api/v1/detect` use the same pipeline. There is no real
+attention heatmap yet; the UI no longer shows a placeholder as an explanation.
+
+## Correct predictions and prepare training data
+
+Use the moderator page or the correction buttons below a result. `Mark Safe`,
+`Mark Harmful` and `Mark Not a meme` save explicit human verdicts. A failed write
+stays visible and is never reported as success. All unreviewed results, including
+automatic decisions, can be corrected. The queue displays up to 200 items at once.
+
+The `meme_images` table stores image bytes separately, deduplicated by SHA-256.
+This keeps training images available after local upload files are lost. For a
+larger public dataset, migrate image payloads to object storage.
+
+```powershell
+# Optionally recover legacy uploads still present on this machine:
+.venv\Scripts\python scripts/backfill_images.py
+.venv\Scripts\python scripts/backfill_images.py --apply
+
+# Export image/text/user-label records:
+.venv\Scripts\python scripts/export_feedback.py --output ../output/feedback
+```
+
+Export excludes unreviewed predictions and conflicting duplicate labels. Non-memes
+have `label: null` and are kept separate from binary meme-classifier training.
+Missing images/transcriptions are reported. Review annotations and near-duplicate
+templates, then assign `train`, `validation`, `test` in the exported JSONL. Do not
+reuse the diagnostic `meme test` folder as a claimed independent final test set
+after training on its labels.
+
+```powershell
+.venv\Scripts\python scripts/train_feedback.py --manifest ../output/feedback/feedback.jsonl --output ../output/candidate.keras
+```
+
+Training refuses unassigned splits, duplicate images, missing classes or overwriting
+an existing model. It saves a separate candidate and held-out metrics. Saving a
+moderator verdict **does not automatically retrain or improve the deployed model**.
+
+## Verification
+
+```powershell
+# In backend: isolated SQLite tests; no live API charges or Supabase writes
+.venv\Scripts\python -m pytest -q
+
+# Live labeled-image evaluation (writes uploads to the configured database)
+.venv\Scripts\python scripts/evaluate_images.py --images "../meme test" --url http://localhost:8001
+
+# In frontend
+npm test
+npm run build
+npm run lint
+```
+
+The evaluator reads `0_` / `1_` and descriptive filenames only to calculate expected
+labels, then uploads with anonymous filenames. It reports abstentions separately
+from correct classifications. See `docs/inference-diagnosis.md` for the measured
+results and remaining model limitations.
+
+Implementation references: [EfficientNet input contract](https://keras.io/api/applications/efficientnet/efficientnet_models/),
+[RapidOCR](https://rapidai.github.io/RapidOCRDocs/main/en/install_usage/rapidocr/install/),
+[Supabase transaction pooling](https://supabase.com/kb/troubleshooting/disabling-prepared-statements-qL8lEL).

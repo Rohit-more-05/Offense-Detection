@@ -22,7 +22,7 @@ export default function ModeratorQueue() {
           <div>
             <h1 className="text-2xl font-bold text-slate-100">Moderator Queue</h1>
             <p className="text-sm text-slate-400">
-              Review memes flagged for human moderation. Auto-refreshes every 10 seconds.
+              Review and correct uploads, including automatic decisions. Saved verdicts can be exported for training.
             </p>
           </div>
         </div>

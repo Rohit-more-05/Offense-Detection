@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 import textwrap
 
-from sqlalchemy import create_engine, text
+from sqlalchemy import create_engine, text, inspect
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 
 from core.config import get_settings
@@ -40,7 +40,12 @@ try:
         pool_recycle=1800,        # Recycle connections after 30 mins to prevent stale drops
         pool_timeout=30,          # Wait max 30s for a connection from the pool
         # psycopg3 connect_args: use connect_timeout (seconds)
-        connect_args={"connect_timeout": 10},
+        connect_args=({"check_same_thread": False} if _raw_url.startswith("sqlite") else {
+            "connect_timeout": 5,
+            # Supabase's transaction pooler may reuse a different PostgreSQL
+            # connection for each transaction; named prepared statements collide.
+            "prepare_threshold": None,
+        }),
     )
     logger.info("[database] Supabase connection pool initialized → %s", masked_url)
 except Exception as exc:
@@ -97,6 +102,14 @@ def verify_predictions_table() -> None:
     """Query information_schema to confirm predictions table exists."""
     logger.info("[verify_predictions_table] START — checking predictions table existence")
     try:
+        columns = {c["name"] for c in inspect(engine).get_columns("predictions")}
+        required = {"extracted_text", "image_sha256", "analysis_metadata", "decision_source"}
+        if not required.issubset(columns):
+            raise RuntimeError("Database schema is outdated. Run alembic upgrade head.")
+        if not inspect(engine).has_table("meme_images"):
+            raise RuntimeError("Image storage migration missing. Run alembic upgrade head.")
+        if engine.dialect.name == "sqlite":
+            return
         with engine.connect() as conn:
             result = conn.execute(
                 text(
@@ -131,7 +144,7 @@ def init_db() -> None:
     logger.info("[init_db] START — running Base.metadata.create_all()")
     try:
         # Import models so their metadata is registered on Base before create_all
-        from models import prediction  # noqa: F401
+        from models import prediction, scan_history, meme_image  # noqa: F401
 
         Base.metadata.create_all(bind=engine)
         logger.info("[init_db] SUCCESS — all tables created/verified")

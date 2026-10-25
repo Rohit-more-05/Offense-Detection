@@ -43,6 +43,8 @@ export const DECISION_CONFIG = {
 };
 
 export const LABEL_CONFIG = {
+  'Needs review': { pillClass: 'bg-amber-500/20 text-amber-300 border border-amber-500/40' },
+  'Not a meme': { pillClass: 'bg-slate-500/20 text-slate-300 border border-slate-500/40' },
   [LABELS.HARMFUL]: {
     pillClass: 'bg-red-500/20 text-red-300 border border-red-500/40',
   },

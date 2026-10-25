@@ -9,7 +9,7 @@ import { DECISIONS, DECISION_CONFIG } from '../utils/constants';
  * Props:
  *   decision - "AUTO_APPROVE" | "AUTO_FLAG" | "HUMAN_REVIEW"
  */
-export default function ModerationBanner({ decision }) {
+export default function ModerationBanner({ decision, persisted = true }) {
   useEffect(() => {
     console.log('[ModerationBanner] mounted — decision=%s', decision);
   }, [decision]);
@@ -33,7 +33,7 @@ export default function ModerationBanner({ decision }) {
       </div>
       <div>
         <p className={`text-base font-semibold ${cfg.textClass}`}>{cfg.label}</p>
-        <p className="mt-0.5 text-sm text-slate-400">{cfg.description}</p>
+        <p className="mt-0.5 text-sm text-slate-400">{!persisted && decision === DECISIONS.HUMAN_REVIEW ? 'Manual review is needed, but this upload was not saved to the queue.' : cfg.description}</p>
       </div>
     </div>
   );

@@ -1,157 +1,65 @@
-"""
-routers/review.py
-=================
-GET  /api/v1/review-queue          — List pending HUMAN_REVIEW items
-POST /api/v1/review/{item_id}/verdict — Submit human verdict for one item
-"""
-
-from __future__ import annotations
-
+"""Real human feedback, including corrections of automatically decided scans."""
 from datetime import datetime, timezone
-from typing import List
+from typing import Literal
+from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import select
+from sqlalchemy import case, select
 from sqlalchemy.orm import Session
 
 from core.database import get_db
-from core.logger import get_logger
 from models.prediction import Prediction
 from schemas.review import ReviewQueueItem, VerdictRequest, VerdictResponse
 
-logger = get_logger(__name__)
 router = APIRouter(prefix="/review", tags=["Review Queue"])
 
-BASE_IMAGE_URL = "/static/uploads"
 
-
-@router.get(
-    "-queue",
-    response_model=List[ReviewQueueItem],
-    summary="Fetch all items pending human review",
-    responses={
-        500: {"description": "Database query failed"},
-    },
-)
-def get_review_queue(db: Session = Depends(get_db)) -> List[ReviewQueueItem]:
-    """
-    Returns all prediction rows where:
-    - `moderation_decision == 'HUMAN_REVIEW'`
-    - `reviewed == False`
-
-    Ordered by `created_at` ascending (oldest first).
-    """
-    logger.info("[get_review_queue] START — querying HUMAN_REVIEW pending items")
-
+@router.get("-queue", response_model=list[ReviewQueueItem])
+def get_review_queue(
+    scope: Literal["all", "flagged"] = "all", db: Session = Depends(get_db),
+):
     try:
-        stmt = (
-            select(Prediction)
-            .where(
-                Prediction.moderation_decision == "HUMAN_REVIEW",
-                Prediction.reviewed == False,  # noqa: E712
-            )
-            .order_by(Prediction.created_at.asc())
-        )
-        rows = db.execute(stmt).scalars().all()
-        logger.info("[get_review_queue] SUCCESS — found %d pending items", len(rows))
-
-        result = [
-            ReviewQueueItem(
-                prediction_id=row.id,
-                filename=row.filename,
-                image_url=f"{BASE_IMAGE_URL}/{row.filename}",
-                label=row.label,
-                confidence=row.confidence,
-                created_at=row.created_at,
-            )
-            for row in rows
-        ]
-        logger.info("[get_review_queue] Returning %d items", len(result))
-        return result
-
-    except Exception as exc:
-        logger.warning(
-            "[get_review_queue] FAILED (non-fatal) — DB offline or error — returning empty list. Reason: %s", str(exc)
-        )
-        return []
+        # Historical auto-decisions used reviewed=True without a human verdict.
+        # They remain correctable and must never count as human training labels.
+        statement = select(Prediction).where(Prediction.human_verdict.is_(None))
+        if scope == "flagged":
+            statement = statement.where(Prediction.moderation_decision.in_(["HUMAN_REVIEW", "AUTO_FLAG"]))
+        rows = db.execute(statement.order_by(
+            case((Prediction.moderation_decision == "HUMAN_REVIEW", 0), else_=1),
+            Prediction.created_at.asc(),
+        ).limit(200)).scalars().all()
+        return [ReviewQueueItem(
+            prediction_id=row.id, filename=row.filename,
+            image_url=f"/api/v1/images/{row.id}",
+            label=row.label, confidence=row.confidence, created_at=row.created_at,
+            extracted_text=row.extracted_text, content_type=row.content_type,
+            reason=row.analysis_reason, decision_source=row.decision_source,
+            moderation_decision=row.moderation_decision,
+        ) for row in rows]
+    except Exception:
+        db.rollback()
+        raise HTTPException(503, "Review database unavailable. Check DATABASE_URL and run alembic upgrade head. The queue could not be loaded.")
 
 
-@router.post(
-    "/{item_id}/verdict",
-    response_model=VerdictResponse,
-    summary="Submit a human verdict for a pending review item",
-    responses={
-        404: {"description": "Prediction item not found"},
-        500: {"description": "Database update failed"},
-    },
-)
-def submit_verdict(
-    item_id: str,
-    body: VerdictRequest,
-    db: Session = Depends(get_db),
-) -> VerdictResponse:
-    """
-    Record a human moderator's verdict on a flagged item.
-
-    - **human_verdict**: `"Harmful"` or `"Non-Harmful"`
-    - **notes**: optional reviewer notes (max 2048 chars)
-    """
-    logger.info(
-        "[submit_verdict] START — item_id=%r | verdict=%r | notes=%r",
-        item_id,
-        body.human_verdict,
-        body.notes,
-    )
-
-    # ── Lookup ────────────────────────────────────────────────────────────────
+@router.post("/{item_id}/verdict", response_model=VerdictResponse)
+def submit_verdict(item_id: UUID, body: VerdictRequest, db: Session = Depends(get_db)):
     try:
-        row = db.get(Prediction, item_id)
-    except Exception as exc:
-        logger.error(
-            "[submit_verdict] DB lookup FAILED — item_id=%r | reason: %s",
-            item_id,
-            str(exc),
-            exc_info=True,
-        )
-        raise HTTPException(status_code=500, detail=f"Database lookup failed: {exc}")
-
+        row = db.get(Prediction, str(item_id))
+    except Exception:
+        db.rollback()
+        raise HTTPException(503, "Review database unavailable. Verdict was not saved.")
     if row is None:
-        logger.warning("[submit_verdict] 404 — item_id=%r not found", item_id)
-        raise HTTPException(status_code=404, detail=f"Prediction '{item_id}' not found.")
-
-    logger.info(
-        "[submit_verdict] Found prediction — label=%r | confidence=%s | reviewed=%s",
-        row.label,
-        row.confidence,
-        row.reviewed,
-    )
-
-    # ── Update ────────────────────────────────────────────────────────────────
+        raise HTTPException(404, "Prediction not found.")
     now = datetime.now(timezone.utc)
     try:
         row.reviewed = True
         row.human_verdict = body.human_verdict
         row.reviewer_notes = body.notes
         row.reviewed_at = now
+        # Preserve original model output for error analysis; the ground truth
+        # lives in human_verdict and never silently changes the model weights.
         db.commit()
-        db.refresh(row)
-        logger.info(
-            "[submit_verdict] SUCCESS — item_id=%r | verdict=%r | reviewed_at=%s",
-            item_id,
-            body.human_verdict,
-            now.isoformat(),
-        )
-    except Exception as exc:
+    except Exception:
         db.rollback()
-        logger.error(
-            "[submit_verdict] DB update FAILED — rolling back — reason: %s",
-            str(exc),
-            exc_info=True,
-        )
-        raise HTTPException(status_code=500, detail=f"Failed to save verdict: {exc}")
-
-    return VerdictResponse(
-        prediction_id=item_id,
-        status="reviewed",
-        updated_at=now,
-    )
+        raise HTTPException(503, "Database update failed. Verdict was not saved; please retry.")
+    return VerdictResponse(prediction_id=str(item_id), updated_at=now)

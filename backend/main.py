@@ -32,6 +32,7 @@ from api import predict as predict_router
 from api import detect as detect_router
 from services.model_service import load_global_model
 from api import review as review_router
+from api import images as images_router
 
 settings = get_settings()
 
@@ -49,7 +50,8 @@ if logger.hasHandlers():
 
 # Dual-Stream: stdout + file for DevSecOps traceability
 stream_handler = logging.StreamHandler(sys.stdout)
-stream_handler.stream.reconfigure(encoding="utf-8")  # Fix Windows CP1252 emoji crash
+if hasattr(stream_handler.stream, "reconfigure"):
+    stream_handler.stream.reconfigure(encoding="utf-8")
 stream_handler.setFormatter(TelemetryFormatter(datefmt="%Y-%m-%d %H:%M:%S"))
 logger.addHandler(stream_handler)
 
@@ -72,6 +74,7 @@ async def lifespan(app: FastAPI):
     logger.info("   Environment : %s", settings.environment)
     logger.info("   Log level   : %s", settings.log_level)
 
+    app.state.database_ready = False
     # 1. Load the Keras baseline model (non-fatal if it fails)
     try:
         load_global_model()
@@ -82,8 +85,8 @@ async def lifespan(app: FastAPI):
     # 2. Verify Supabase connectivity (non-fatal — allow offline testing)
     try:
         verify_connection()
-        init_db()
         verify_predictions_table()
+        app.state.database_ready = True
         logger.info("[STARTUP] Database connection OK")
     except Exception as exc:
         logger.warning("[STARTUP] Database unavailable (predictions will not be persisted): %s", exc)
@@ -103,8 +106,8 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="Multimodal Meme Detection API",
     description=(
-        "Phase 1 — mock inference pipeline for the Harmful Meme Detection system. "
-        "All API contracts are stable for Phase 2 real-model swap."
+        "Local multimodal baseline with explicit OCR status, optional contextual "
+        "verification and human moderation feedback."
     ),
     version="1.0.0",
     lifespan=lifespan,
@@ -170,8 +173,8 @@ async def global_exception_handler(request: Request, exc: Exception) -> JSONResp
 
 
 # ── Static files ───────────────────────────────────────────────────────────────
-_upload_dir = Path(settings.upload_dir)
-_heatmap_dir = Path(settings.heatmap_dir)
+_upload_dir = settings.storage_path(settings.upload_dir)
+_heatmap_dir = settings.storage_path(settings.heatmap_dir)
 _upload_dir.mkdir(parents=True, exist_ok=True)
 _heatmap_dir.mkdir(parents=True, exist_ok=True)
 
@@ -183,6 +186,7 @@ app.mount("/static/heatmaps", StaticFiles(directory=str(_heatmap_dir)), name="he
 app.include_router(predict_router.router, prefix="/api/v1")
 app.include_router(detect_router.router, prefix="/api/v1")
 app.include_router(review_router.router, prefix="/api/v1")
+app.include_router(images_router.router, prefix="/api/v1")
 
 
 # ── Health endpoint ────────────────────────────────────────────────────────────
@@ -201,9 +205,12 @@ def health_check():
         settings.environment, model_status
     )
     return {
+        "service": "memeguard",
         "status": "ok",
         "environment": settings.environment,
         "model_status": model_status,
+        "database_ready": getattr(app.state, "database_ready", False),
+        "context_verification_enabled": settings.context_verification_enabled,
     }
 
 # ── Dummy Login Endpoint (Telemetry Injection Check) ───────────────────────────

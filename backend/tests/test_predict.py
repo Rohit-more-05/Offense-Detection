@@ -1,126 +1,81 @@
-"""
-test_predict.py
-===============
-Tests for POST /api/v1/predict endpoint.
-Uses httpx.AsyncClient with TestClient overrides for synchronous testing.
-"""
-
-from __future__ import annotations
-
-import io
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
-from fastapi.testclient import TestClient
 
-from main import app
-
-client = TestClient(app)
-
-# ── Helpers ────────────────────────────────────────────────────────────────────
-
-def _make_image_bytes() -> bytes:
-    """Minimal valid JPEG header bytes for upload tests."""
-    return bytes([
-        0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10,
-        0x4A, 0x46, 0x49, 0x46, 0x00, 0x01,
-    ])
+from models.prediction import Prediction
 
 
-def _upload(
-    filename: str = "test_meme.jpg",
-    content_type: str = "image/jpeg",
-    text_override: str | None = None,
-) -> dict:
-    files = {"file": (filename, io.BytesIO(_make_image_bytes()), content_type)}
-    data = {}
-    if text_override:
-        data["manual_text_override"] = text_override
-    return client.post("/api/v1/predict", files=files, data=data)
+def upload(client, data, name="untrusted_1_harmful.png", endpoint="predict"):
+    return client.post(f"/api/v1/{endpoint}", files={"file": (name, data, "image/png")})
 
 
-# ── Tests ──────────────────────────────────────────────────────────────────────
+def test_full_upload_stores_text_score_and_provenance(client, image_bytes, inference, db):
+    response = upload(client, image_bytes)
+    assert response.status_code == 200
+    data = response.json()
+    assert data["label"] == "Safe"  # Contextual verdict, not the filename.
+    assert data["baseline_label"] == "Harmful"
+    assert data["harmful_probability"] == 0.6
+    assert data["moderation_decision"] == "HUMAN_REVIEW"
+    assert data["persisted"] is True
+    assert data["heatmap_url"] is None
+    row = db.get(Prediction, data["prediction_id"])
+    assert row.extracted_text == inference["assessment"].extracted_text
+    assert row.reviewed is False and row.human_verdict is None
+    assert row.image_sha256 and row.model_version == "test-model"
+    assert client.get(data["image_url"]).status_code == 200
 
-class TestHealthCheck:
-    def test_health_ok(self):
-        resp = client.get("/health")
-        assert resp.status_code == 200
-        assert resp.json()["status"] == "ok"
+
+@pytest.mark.parametrize("kind", ["document", "screenshot", "photograph"])
+def test_non_meme_never_becomes_harmful_or_safe(client, image_bytes, inference, kind):
+    inference["assessment"].content_type = kind
+    inference["assessment"].verdict = "not_applicable"
+    with patch("services.model_service.predict") as predictor:
+        data = upload(client, image_bytes).json()
+    predictor.assert_not_called()
+    assert data["label"] == "Not a meme"
+    assert data["harmful_probability"] is None
+    assert data["moderation_decision"] == "HUMAN_REVIEW"
 
 
-class TestPredict:
-    def test_predict_returns_200_with_valid_image(self):
-        resp = _upload()
-        assert resp.status_code == 200, resp.text
-        body = resp.json()
-        assert "prediction_id" in body
-        assert body["label"] in ("Harmful", "Safe")
-        assert 0.0 <= body["confidence"] <= 1.0
-        assert body["moderation_decision"] in (
-            "AUTO_APPROVE", "AUTO_FLAG", "HUMAN_REVIEW"
-        )
-        assert isinstance(body["execution_time_ms"], int)
-        assert body["heatmap_url"] == "/static/heatmaps/placeholder.png"
+@pytest.mark.parametrize("status", ["error", "no_text"])
+def test_ocr_failure_or_empty_text_abstains(client, image_bytes, inference, status):
+    inference.update(assessment=None, status=status)
+    with patch("services.model_service.predict") as predictor:
+        data = upload(client, image_bytes).json()
+    predictor.assert_not_called()
+    assert data["label"] == "Needs review"
+    assert data["harmful_probability"] is None
 
-    def test_predict_rejects_invalid_content_type(self):
-        resp = _upload(filename="doc.pdf", content_type="application/pdf")
-        assert resp.status_code == 400
-        assert "Unsupported file type" in resp.json()["detail"]
 
-    def test_predict_accepts_png(self):
-        resp = _upload(filename="meme.png", content_type="image/png")
-        assert resp.status_code == 200
+def test_actual_image_bytes_validated(client, inference):
+    assert upload(client, b"not an image").status_code == 400
 
-    def test_predict_accepts_webp(self):
-        resp = _upload(filename="meme.webp", content_type="image/webp")
-        assert resp.status_code == 200
 
-    def test_predict_with_text_override(self):
-        resp = _upload(text_override="Kill all minorities")
-        assert resp.status_code == 200
-        assert resp.json()["label"] in ("Harmful", "Safe")
+def test_size_limit(client, image_bytes, inference, monkeypatch):
+    from core.config import get_settings
+    monkeypatch.setattr(get_settings(), "max_upload_bytes", 10)
+    assert upload(client, image_bytes).status_code == 413
 
-    def test_predict_decision_consistent_with_confidence(self):
-        """
-        Run many predictions and verify that whenever decision is AUTO_APPROVE,
-        confidence < 0.10, and when AUTO_FLAG, confidence > 0.90.
-        (HUMAN_REVIEW band is 0.10–0.90.)
-        """
-        errors = []
-        for _ in range(30):
-            resp = _upload()
-            body = resp.json()
-            c = body["confidence"]
-            d = body["moderation_decision"]
-            if d == "AUTO_APPROVE" and c >= 0.10:
-                errors.append(f"AUTO_APPROVE but confidence={c}")
-            if d == "AUTO_FLAG" and c <= 0.90:
-                errors.append(f"AUTO_FLAG but confidence={c}")
-            if d == "HUMAN_REVIEW" and not (0.10 <= c <= 0.90):
-                errors.append(f"HUMAN_REVIEW but confidence={c} out of band")
-        assert not errors, f"Decision/confidence inconsistencies: {errors}"
 
-    @patch("app.routers.predict.ocr_service.extract_text")
-    def test_predict_visual_only_fallback_on_empty_text(self, mock_ocr):
-        """
-        Upload a test image containing no embedded text (e.g., a plain photo).
-        Assert the response does NOT classify it as 'Harmful' purely because of a filename artifact.
-        """
-        mock_ocr.return_value = "   \n  " # Simulating empty OCR output
-        resp = _upload(filename="offensive_filename.jpg")
-        assert resp.status_code == 200
-        body = resp.json()
-        assert body["label"] == "Safe"
-        assert body["moderation_decision"] == "HUMAN_REVIEW"
-        
-    @patch("app.routers.predict.ocr_service.extract_text")
-    def test_predict_extracts_offensive_text(self, mock_ocr):
-        """
-        Upload a test image with a known offensive text string burned into it.
-        Assert OCR successfully extracts it and routes it properly.
-        """
-        mock_ocr.return_value = "Kill all minorities"
-        resp = _upload()
-        assert resp.status_code == 200
-        body = resp.json()
-        assert body["label"] in ("Harmful", "Safe")
+def test_both_endpoints_use_reviewable_predictions(client, image_bytes, inference):
+    data = upload(client, image_bytes, endpoint="detect").json()
+    ids = [row["prediction_id"] for row in client.get("/api/v1/review-queue").json()]
+    assert data["prediction_id"] in ids
+
+
+def test_database_failure_is_visible(client, image_bytes, inference):
+    with patch("sqlalchemy.orm.Session.commit", side_effect=RuntimeError("offline")):
+        data = upload(client, image_bytes).json()
+    assert data["persisted"] is False
+    assert any("NOT saved" in message for message in data["warnings"])
+
+
+def test_model_failure_is_review_not_false_classification(client, image_bytes, inference):
+    with patch("services.model_service.predict", side_effect=RuntimeError("model missing")):
+        data = upload(client, image_bytes).json()
+    assert data["label"] == "Needs review" and data["harmful_probability"] is None
+
+
+def test_health_identifies_this_service(client):
+    assert client.get("/health").json()["service"] == "memeguard"

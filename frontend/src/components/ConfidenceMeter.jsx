@@ -25,7 +25,7 @@ export default function ConfidenceMeter({ confidence, label }) {
   return (
     <div className="space-y-2">
       <div className="flex items-center justify-between text-sm">
-        <span className="text-slate-400 font-medium">Confidence Score</span>
+        <span className="text-slate-400 font-medium">Local model harmful-class score</span>
         <span className="font-bold text-slate-200 tabular-nums">{pct}%</span>
       </div>
       <div className="relative h-3 w-full overflow-hidden rounded-full bg-slate-700/60">
@@ -36,7 +36,7 @@ export default function ConfidenceMeter({ confidence, label }) {
           aria-valuenow={pct}
           aria-valuemin={0}
           aria-valuemax={100}
-          aria-label={`Confidence: ${pct}%`}
+          aria-label={`Local model harmful-class score: ${pct}%`}
           id="confidence-bar"
         />
         {/* Shimmer effect */}

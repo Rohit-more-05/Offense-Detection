@@ -1,49 +1,47 @@
-from __future__ import annotations
-
 from functools import lru_cache
 from pathlib import Path
-from typing import List
 
+from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+BACKEND_DIR = Path(__file__).resolve().parent.parent
 
 
 class Settings(BaseSettings):
-    """
-    Application settings loaded from environment variables / .env file.
-    All thresholds are configurable so Phase 2 can tune them without code changes.
-    """
-
     model_config = SettingsConfigDict(
-        env_file=Path(__file__).resolve().parent.parent / ".env",
-        env_file_encoding="utf-8",
-        case_sensitive=False,
-        extra="ignore",
+        env_file=BACKEND_DIR / ".env", env_file_encoding="utf-8",
+        case_sensitive=False, extra="ignore",
     )
-
-    # ── Database ──────────────────────────────────────────────────────────────
-    database_url: str  # Supabase Transaction Pooler connection string
-
-    # ── Environment ───────────────────────────────────────────────────────────
+    database_url: str
     environment: str = "development"
-    log_level: str = "DEBUG"
+    log_level: str = "INFO"
+    upload_dir: str = "storage/uploads"
+    heatmap_dir: str = "storage/heatmaps"
+    auto_approve_threshold: float = Field(0.10, ge=0, le=1)
+    auto_flag_threshold: float = Field(0.90, ge=0, le=1)
+    cors_origins: list[str] = ["http://localhost:5173", "http://localhost:5174"]
+    max_upload_bytes: int = Field(10 * 1024 * 1024, gt=0)
+    max_image_pixels: int = Field(20_000_000, gt=0)
+    # The contextual verifier never rewrites the Keras score.
+    context_verification_enabled: bool = True
+    gemini_api_key: str = ""
+    gemini_model: str = "gemini-3.8-flash"
+    gemini_fallback_model: str = "gemini-3.5-flash"
+    vision_timeout_seconds: int = Field(35, ge=1, le=120)
+    tesseract_cmd: str = ""
+    ocr_languages: str = "eng"
 
-    # ── Storage paths (relative to backend/) ──────────────────────────────────
-    upload_dir: str = "app/storage/uploads"
-    heatmap_dir: str = "app/storage/heatmaps"
+    @model_validator(mode="after")
+    def validate_thresholds(self):
+        if self.auto_approve_threshold >= self.auto_flag_threshold:
+            raise ValueError("AUTO_APPROVE_THRESHOLD must be below AUTO_FLAG_THRESHOLD")
+        return self
 
-    # ── Decision thresholds (SRS FR6) ─────────────────────────────────────────
-    auto_approve_threshold: float = 0.10
-    auto_flag_threshold: float = 0.90
-
-    # ── CORS ──────────────────────────────────────────────────────────────────
-    cors_origins: List[str] = ["http://localhost:5173", "http://localhost:5174"]
-
-    # ── HuggingFace Inference API (api-inference branch) ──────────────────────
-    # Set HUGGINGFACE_API_KEY in Render environment variables.
-    huggingface_api_key: str = ""
+    def storage_path(self, value: str) -> Path:
+        path = Path(value)
+        return path if path.is_absolute() else BACKEND_DIR / path
 
 
 @lru_cache()
 def get_settings() -> Settings:
-    """Cached settings singleton — call this everywhere instead of constructing Settings()."""
     return Settings()

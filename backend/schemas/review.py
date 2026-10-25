@@ -1,53 +1,31 @@
-from __future__ import annotations
-
 from datetime import datetime
-from typing import Literal, Optional
+from typing import Literal
 
 from pydantic import BaseModel, Field
 
+from schemas.predict import PredictionLabel
+
 
 class ReviewQueueItem(BaseModel):
-    """Represents a single pending HUMAN_REVIEW item returned from GET /api/v1/review-queue."""
-
     prediction_id: str
     filename: str
     image_url: str
-    label: Literal["Harmful", "Safe"]
-    confidence: float = Field(..., ge=0.0, le=1.0)
+    label: PredictionLabel
+    confidence: float | None = Field(None, ge=0, le=1)
     created_at: datetime
-
-    model_config = {"from_attributes": True}
+    extracted_text: str | None = None
+    content_type: str | None = None
+    reason: str | None = None
+    decision_source: str | None = None
+    moderation_decision: str
 
 
 class VerdictRequest(BaseModel):
-    """Request body for POST /api/v1/review/{item_id}/verdict."""
-
-    human_verdict: Literal["Harmful", "Non-Harmful"] = Field(
-        ..., description="Human moderator's final decision"
-    )
-    notes: Optional[str] = Field(
-        None, max_length=2048, description="Optional reviewer notes"
-    )
-
-    model_config = {"json_schema_extra": {
-        "example": {
-            "human_verdict": "Harmful",
-            "notes": "Contains explicit hate speech targeting protected group.",
-        }
-    }}
+    human_verdict: Literal["Harmful", "Non-Harmful", "Not a meme"]
+    notes: str | None = Field(None, max_length=2048)
 
 
 class VerdictResponse(BaseModel):
-    """Response confirming a verdict has been recorded."""
-
     prediction_id: str
-    status: str = Field(..., description="Always 'reviewed' on success")
+    status: Literal["reviewed"] = "reviewed"
     updated_at: datetime
-
-    model_config = {"json_schema_extra": {
-        "example": {
-            "prediction_id": "550e8400-e29b-41d4-a716-446655440000",
-            "status": "reviewed",
-            "updated_at": "2026-09-06T10:00:00Z",
-        }
-    }}

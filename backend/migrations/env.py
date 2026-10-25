@@ -27,7 +27,7 @@ load_dotenv(BACKEND_DIR / ".env")
 
 # ── Import your models so Alembic sees the full metadata ──────────────────────
 from core.database import Base  # noqa: E402
-from models import prediction, scan_history  # noqa: F401, E402  — registers model on Base
+from models import prediction, scan_history, meme_image  # noqa: F401, E402
 
 # ── Alembic Config object ──────────────────────────────────────────────────────
 config = context.config
@@ -75,6 +75,7 @@ def run_migrations_online() -> None:
         config.get_section(config.config_ini_section, {}),
         prefix="sqlalchemy.",
         poolclass=pool.NullPool,
+        connect_args=({} if config.get_main_option("sqlalchemy.url").startswith("sqlite") else {"prepare_threshold": None, "connect_timeout": 10}),
     )
     with connectable.connect() as connection:
         context.configure(
